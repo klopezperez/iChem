@@ -32,7 +32,9 @@ def calculate_counters(data, n_objects = None, k = 1):
     Returns
     -------
     counters : dict
-        Dictionary with the weighted and non-weighted counters.
+        Dictionary with 1-similarity counters (a), 0-similarity counters (d), total similarity counters (a+d, total_sim),
+        total_counters (p), and dissimilarity counters (c+b, total_dis).
+        Counters can be used to calculate any similarity index of choice using their respective formulas.
 
     """
     
@@ -70,7 +72,7 @@ def calculate_counters(data, n_objects = None, k = 1):
                 "total_dis": total_dis, "p": p}
     return counters
 
-def calculate_isim(data, n_objects = None, n_ary = 'RR'):
+def calculate_isim(data, n_objects = None, n_ary = 'JT'):
     """Calculate the iSIM index for RR, JT, or SM
 
     Arguments
@@ -90,6 +92,7 @@ def calculate_isim(data, n_objects = None, n_ary = 'RR'):
     -------
     isim : float
         iSIM index for the specified similarity index.
+        iSIM corresponds to the average similarity of the set calculated linearly.
     """
 
     # Check if the data is a np.ndarray of a list
@@ -142,7 +145,7 @@ def gen_sim_dict(data, n_objects = None, k = 1):
     Returns
     -------
     sim_dict : dict
-        Dictionary with the weighted and non-weighted similarity indexes."""
+        Dictionary with all the available iSIM similarity indexes in the module."""
  
     # Indices
     # AC: Austin-Colwell, BUB: Baroni-Urbani-Buser, CTn: Consoni-Todschini n
@@ -183,13 +186,13 @@ def gen_sim_dict(data, n_objects = None, k = 1):
     #           'JT':jt, 'RT':rt, 'RR':rr, 'SM':sm, 'SS1':ss1, 'SS2':ss2}
     return Indices
 
-def calculate_medoid(data, n_ary = 'RR'):
+def calculate_medoid(data, n_ary = 'JT'):
     return np.argmin(calculate_comp_sim(data, n_ary = n_ary))
 
-def calculate_outlier(data, n_ary = 'RR'):
+def calculate_outlier(data, n_ary = 'JT'):
     return np.argmax(calculate_comp_sim(data, n_ary = n_ary))
 
-def calculate_comp_sim(data, n_ary = 'RR'):
+def calculate_comp_sim(data, n_ary = 'JT'):
     """Calculate the complementary similarity for RR, JT, or SM
 
     Arguments
