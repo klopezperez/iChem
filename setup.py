@@ -7,10 +7,10 @@ DESCRIPTION = 'Module to use iSIM (instant Similarity) to perform typical Chemin
 setup(
         name='iChem',
         version=VERSION,
-        description=DESCRIPTION
-        url=''
+        description=DESCRIPTION,
+        url='',
         packages = find_packages(),
-        install requires=[
+        install_requires=[
         'numpy',
         'matplotlib',
         'pandas',
