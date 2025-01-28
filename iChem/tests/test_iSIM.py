@@ -1,4 +1,4 @@
-import iChem.iSIM as iSIM
+import iChem.iSIM.iSIM as iSIM
 import numpy as np
 import pytest
 
