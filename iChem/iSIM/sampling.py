@@ -1,4 +1,5 @@
-from iSIM.comp import *
+from iSIM import calculate_comp_sim
+import numpy as np
 
 def medoid_sampling(fingerprints = None, n_ary = 'JT', percentage = 10, comp_sim = None):
     """
@@ -131,7 +132,7 @@ def stratified_sampling(fingerprints = None, n_ary = 'JT', percentage = 10, stra
   
     return np.array(sampled_indexes)
 
-def quota_sampling(fingerprints = None, n_ary = 'JT', percentage = 10, n_bins = 10, hard_cap = True, comp_sim = None):
+def quota_sampling(fingerprints = None, n_ary = 'JT', percentage = 10, n_bins = None, hard_cap = True, comp_sim = None):
     """
     Quota sampling according to comp_sim values.
     
@@ -155,7 +156,11 @@ def quota_sampling(fingerprints = None, n_ary = 'JT', percentage = 10, n_bins = 
     else:
         comp_sim = comp_sim
         n_objects = len(comp_sim)
-    
+
+        # Define the number of batches if not specified
+    if not n_bins:
+        n_bins = int(n_objects*percentage/100)
+
     # Define the number of objetcs to sample
     n_sample = int(n_objects*percentage/100)
     
