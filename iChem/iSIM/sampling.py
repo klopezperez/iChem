@@ -1,4 +1,4 @@
-from iSIM import calculate_comp_sim
+from iChem.iSIM.iSIM import calculate_comp_sim
 import numpy as np
 
 def medoid_sampling(fingerprints = None, n_ary = 'JT', percentage = 10, comp_sim = None):
