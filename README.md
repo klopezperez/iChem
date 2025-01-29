@@ -1,7 +1,6 @@
-iChem - instanst Cheminformatics
+iChem - Instanst Cheminformatics
 
-![iChem Logo](img/iChem.png)
-
+<img src="img/iChem.png" alt="iChem Logo" width="75%">
 
 Cheminformatics package by the Miranda-Quintana group at the University of Florida
 
