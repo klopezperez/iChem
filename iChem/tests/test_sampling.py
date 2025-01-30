@@ -29,3 +29,8 @@ def test_stratified_sampling():
     stratified = sampling.stratified_sampling(fingerprints, n_ary = 'JT', percentage = 10)
     assert len(stratified) == 11
     assert np.sum([x in [16, 54, 58, 115, 111, 94, 17, 9, 76, 44, 37] for x in stratified]) == 11
+
+def test_quota_sampling():
+    quota = sampling.quota_sampling(fingerprints, n_ary = 'JT', percentage = 10)
+    assert len(quota) == 11
+    assert np.sum([x in [16,  12,   8, 115, 118,  17, 103,   1,  56 ,  4,  90]for x in quota]) == 11

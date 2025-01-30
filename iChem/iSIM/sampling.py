@@ -157,7 +157,7 @@ def quota_sampling(fingerprints = None, n_ary = 'JT', percentage = 10, n_bins = 
         comp_sim = comp_sim
         n_objects = len(comp_sim)
 
-        # Define the number of batches if not specified
+    # Define the number of batches if not specified
     if not n_bins:
         n_bins = int(n_objects*percentage/100)
 
