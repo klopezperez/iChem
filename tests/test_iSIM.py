@@ -3,7 +3,7 @@ import numpy as np
 import pytest
 
 # Read the fingerprint 
-fps = np.load('data/RDKIT_fps.npy')
+fps = np.load('tests/data/RDKIT_fps.npy')
 
 # Test the calculate_isim function
 def test_calculate_isim():

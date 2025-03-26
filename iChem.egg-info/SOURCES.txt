@@ -1,13 +1,12 @@
 README.md
 setup.py
 iChem/__init__.py
-iChem/iSIM.py
 iChem/utils.py
 iChem.egg-info/PKG-INFO
 iChem.egg-info/SOURCES.txt
 iChem.egg-info/dependency_links.txt
 iChem.egg-info/requires.txt
 iChem.egg-info/top_level.txt
-iChem/tests/__init__.py
-iChem/tests/rdkit.py
-iChem/tests/test_iSIM.py
+iChem/iSIM/__init__.py
+iChem/iSIM/iSIM.py
+iChem/iSIM/sampling.py

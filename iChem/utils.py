@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+from iChem.iSIM import calculate_isim
 from rdkit import Chem, DataStructs
 from rdkit.Chem import AllChem, Descriptors
 
@@ -149,7 +150,7 @@ def npy_to_rdkit(fps_np):
     return fp_rdkit
 
 
-def rdkit_pairwise_sim(fingerprints):
+def rdkit_pairwise_sim(fingerprints, return_std: bool = False):
     """
     This function computes the pairwise similarity between all objects in the dataset using Jaccard-Tanimoto similarity.
 
@@ -157,7 +158,8 @@ def rdkit_pairwise_sim(fingerprints):
     fingerprints: list of fingerprints
 
     Returns:
-    similarity: average similarity between all objects
+    similarity: average similarity between all objects 
+    and standard deviation if return_std is True
     """
     if type(fingerprints[0]) == np.ndarray:
         fingerprints = npy_to_rdkit(fingerprints)
@@ -169,7 +171,10 @@ def rdkit_pairwise_sim(fingerprints):
         sim = DataStructs.BulkTanimotoSimilarity(fingerprints[n], fingerprints[n+1:])
         similarity.extend([s for s in sim])
 
-    return np.mean(similarity)
+    if return_std:
+        return np.mean(similarity), np.std(similarity)
+    else:
+        return np.mean(similarity)
 
 
 def rdkit_pairwise_matrix(fingerprints):
@@ -196,3 +201,30 @@ def rdkit_pairwise_matrix(fingerprints):
             matrix[i, i + 1 + j] = s  # Map similarities to the correct indices in the upper triangle
 
     return matrix
+
+def pairwise_average(fingerprints: np.ndarray, n_ary: str = 'RR', return_std: bool = False):
+    """
+    This function computes the pairwise average similarity between all objects in the dataset.
+    
+    Parameters:
+    fingerprints: numpy array of fingerprints
+    n_ary: type of similarity to index compute
+    
+    Returns:
+    average: average similarity between all objects
+    and standard deviation if return_std is True
+    """
+    # Compute the pairwise similarities
+    pairwise_sims = []
+    for i in range(len(fingerprints)):
+        for j in range(len(fingerprints)):
+            if i != j:
+                pairwise_sims.append(calculate_isim(np.array([fingerprints[i], fingerprints[j]]), n_ary = n_ary))
+
+    # Compute the average similarity
+    average = np.mean(pairwise_sims)
+    
+    if return_std:
+        return average, np.std(pairwise_sims)
+    else:
+        return average

@@ -5,7 +5,7 @@ import pytest
 import numpy as np
 import pandas as pd
 
-fps = np.load('data/RDKIT_fps.npy')
+fps = np.load('tests/data/RDKIT_fps.npy')
 
 # Test the npy_to_rdkit function
 def test_npy_to_rdkit():
@@ -18,6 +18,7 @@ def test_rdkit_pairwise_sim():
     # Calculate the pairwise similarity
     value = utils.rdkit_pairwise_sim(fps)
     assert value == pytest.approx(0.198477)
+    assert value == utils.pairwise_average(fps, n_ary="JT")
 
 # Test the rdkit_pairwise_matrix function
 def test_rdkit_pairwise_matrix():
@@ -32,7 +33,7 @@ def test_rdkit_pairwise_matrix():
 # Test the real_fps function and normalization
 def test_real_fps():
     # Calculate the real fingerprints
-    smiles = pd.read_csv('data/logP_data.csv')
+    smiles = pd.read_csv('tests/data/logP_data.csv')
     smiles = smiles['SMILES']
     fps = utils.real_fps(smiles)
     assert type(fps) == np.ndarray

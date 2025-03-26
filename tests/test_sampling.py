@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 # Load fingerprints for the test
-fingerprints = np.load('data/MACCS_fps.npy')
+fingerprints = np.load('tests/data/MACCS_fps.npy')
 comp_sim = iSIM.calculate_comp_sim(fingerprints, n_ary = 'JT')
 
 # Test medoid sampling
