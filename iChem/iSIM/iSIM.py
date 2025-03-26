@@ -232,26 +232,3 @@ def calculate_comp_sim(data, n_ary = 'JT'):
         comp_sims = np.sum((a + (n_objects - comp_matrix) * (n_objects - comp_matrix - 1)/2), axis = 1)/(m * n_objects * (n_objects - 1)/2)
     
     return comp_sims
-
-def pairwise_average(fingerprints: np.ndarray, n_ary: str = 'RR'):
-    """
-    This function computes the pairwise average similarity between all objects in the dataset.
-    
-    Parameters:
-    fingerprints: numpy array of fingerprints
-    n_ary: type of similarity to index compute
-    
-    Returns:
-    average: average similarity between all objects
-    """
-    # Compute the pairwise similarities
-    pairwise_sims = []
-    for i in range(len(fingerprints)):
-        for j in range(len(fingerprints)):
-            if i != j:
-                pairwise_sims.append(calculate_isim(np.array([fingerprints[i], fingerprints[j]]), n_ary = n_ary))
-
-    # Compute the average similarity
-    average = np.mean(pairwise_sims)
-    
-    return average
