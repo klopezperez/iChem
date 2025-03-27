@@ -30,6 +30,28 @@ def test_rdkit_pairwise_matrix():
     assert value.diagonal().sum() == 119
     assert value[0, 1] == iSIM.calculate_isim(np.array([fps[0], fps[1]]), n_ary="JT")
 
+# Test the pairwise_average function
+def test_pairwise_average():
+    # Calculate the average similarity
+    value = utils.pairwise_average(fps, n_ary="JT")
+    assert value == pytest.approx(0.198477)
+
+# Test the pairwise avrage for real fingerprints
+def test_pairwise_average_real():
+    # Calculate the average similarity for real fingerprints
+    smiles = pd.read_csv('tests/data/logP_data.csv')
+    smiles = smiles['SMILES']
+    fps = utils.real_fps(smiles)
+    fps = utils.minmax_norm(fps)
+    value = utils.pairwise_average_real(fps, n_ary="RR")
+    assert value == pytest.approx(0.072021149)
+
+    value = utils.pairwise_average_real(fps, n_ary="SM")
+    assert value == pytest.approx(0.7232780885827678)
+
+    jt_value = utils.pairwise_average_real(fps, n_ary="JT")
+    assert jt_value == pytest.approx(0.48180844, abs = 0.05)
+
 # Test the real_fps function and normalization
 def test_real_fps():
     # Calculate the real fingerprints
