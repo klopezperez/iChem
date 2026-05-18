@@ -1,3 +1,2 @@
 scripts/compare_parallel_timing.py
-*.smi
 scripts/*
