@@ -17,7 +17,6 @@ CC(C)[NH2+]CC(O)COc1cccc2[nH]c3ccccc3c12
 COc1ccccc1OCC[NH2+]CC(O)COc1cccc2[nH]c3ccccc3c12
 C[NH+](C)CCCN1c2ccccc2Sc2ccc(Cl)cc21
 [NH2+]=C(N)N1CCc2ccccc2C1
-N=[C+](N)N1CCc2ccccc2C1
 C#CC[NH+](C)C(C)Cc1ccccc1
 C[NH2+]CCCN1c2ccccc2CCc2ccccc21
 C1=CC=C(C(=C1)CC(=O)[O-])NC2=C(C=CC=C2Cl)Cl
