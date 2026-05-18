@@ -1,1 +1,2 @@
 CPU_CORES = 64
+RETURN_INVALID = False

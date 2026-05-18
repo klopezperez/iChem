@@ -2,7 +2,7 @@ import numpy as np  # type: ignore
 from rdkit import Chem, DataStructs  # type: ignore
 from rdkit.Chem import Descriptors, rdFingerprintGenerator, MACCSkeys  # type: ignore
 from multiprocessing import Pool, cpu_count  # type: ignore
-from .._config import CPU_CORES  # type: ignore
+from .._config import CPU_CORES, RETURN_INVALID  # type: ignore
 from .utils import smiles_standarization
 
 """
@@ -54,7 +54,7 @@ def _get_generator(fp_type: str, n_bits: int):
 def binary_fps(smiles: list,
                fp_type: str = 'RDKIT',
                n_bits: int = 2048,
-               return_invalid: bool = False,
+               return_invalid: bool = RETURN_INVALID,
                standarize: bool = False,
                packed: bool = False):
     """This function generates binary fingerprints for the dataset.
@@ -118,7 +118,7 @@ def _binary_fps(smiles: list,
                 chunk_offset: int = 0,
                 fp_type: str = 'RDKIT',
                 n_bits: int = 2048,
-                return_invalid: bool = False,
+                return_invalid: bool = RETURN_INVALID,
                 standarize: bool = False,
                 packed: bool = False) -> np.ndarray:
     """
@@ -195,7 +195,7 @@ def _binary_fps(smiles: list,
 def count_fps(smiles: list,
               fp_type: str = 'RDKIT',
               n_bits: int = 2048,
-              return_invalid: bool = True) -> np.ndarray:
+              return_invalid: bool = RETURN_INVALID) -> np.ndarray:
     """
     This function generates count-based fingerprints for the dataset.
 
@@ -249,7 +249,7 @@ def _count_fps(smiles: list,
                chunk_offset: int = 0,
                fp_type: str = 'RDKIT',
                n_bits: int = 2048,
-               return_invalid: bool = True) -> np.ndarray:
+               return_invalid: bool = RETURN_INVALID) -> np.ndarray:
     """
     This function generates count-based fingerprints for the dataset.
 
@@ -310,7 +310,7 @@ def _count_fps(smiles: list,
         return fingerprints
 
 
-def real_fps(smiles, return_invalid: bool = False):
+def real_fps(smiles, return_invalid: bool = RETURN_INVALID):
     """
     This function generates real number fingerprints for the dataset.
 
