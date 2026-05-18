@@ -3,9 +3,9 @@ import base64
 import json
 import tempfile
 import os
-from iChem.utils import binary_fps, count_fps, real_fps, normalize_fps, minmax_norm
-from iChem.bblean.similarity import optimal_threshold
-from iChem.bblean.hierarchical import hierarchical_bitbirch
+from iChem.utils.utils import binary_fps, count_fps, real_fps, normalize_fps, minmax_norm
+from iChem.bitbirch.similarity import optimal_threshold
+from iChem.bitbirch.hierarchical import hierarchical_bitbirch
 from iChem.bbreal.hierarchical import hierarchical_bbreal
 from iChem.bbreal import optimal_threshold_real
 from .mol_images import smiles_to_grid_image

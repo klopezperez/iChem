@@ -292,6 +292,11 @@ if __name__ == "__main__":
         help="Base directory for results (optional)"
     )
     parser.add_argument("--verbose", action="store_true", help="Verbose output")
+    parser.add_argument(
+        "--max-jobs-per-script",
+        type=int,
+        default=_config.MAX_JOBS_PER_SCRIPT,
+        help="Maximum number of jobs per submission script")
 
     args = parser.parse_args()
     prepare_initial_round_jobs(
@@ -311,4 +316,5 @@ if __name__ == "__main__":
         slurm_partition=args.slurm_partition,
         result_base_dir=args.result_base_dir,
         verbose=args.verbose,
+        max_jobs_per_script=args.max_jobs_per_script,
     )

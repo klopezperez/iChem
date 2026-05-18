@@ -282,6 +282,12 @@ if __name__ == "__main__":
     parser.add_argument("--slurm-time", type=str, default=_config.SLURM_TIME, help="SLURM time")
     parser.add_argument("--slurm-partition", type=str, default=_config.SLURM_PARTITION, help="SLURM partition")
     parser.add_argument("--verbose", action="store_true", help="Verbose output")
+    parser.add_argument(
+        "--max-jobs-per-script",
+        type=int,
+        default=_config.MAX_JOBS_PER_SCRIPT,
+        help="Maximum number of jobs per submission script"
+    )
 
     args = parser.parse_args()
     prepare_midsection_round_jobs(
@@ -298,4 +304,5 @@ if __name__ == "__main__":
         slurm_time=args.slurm_time,
         slurm_partition=args.slurm_partition,
         verbose=args.verbose,
+        max_jobs_per_script=args.max_jobs_per_script,
     )

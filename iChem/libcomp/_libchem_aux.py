@@ -1,5 +1,5 @@
 import numpy as np # type: ignore
-from ..bblean.similarity import jt_isim_packed
+from ..bitbirch.similarity import jt_isim_packed
 from collections import Counter
 
 def interiSIM(fps1: np.ndarray,

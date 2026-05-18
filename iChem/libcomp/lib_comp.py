@@ -3,7 +3,7 @@ from collections import Counter
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .libchem import LibChem
+    from .lib_chem import LibChem
 
 from ._libchem_aux import (
     interiSIM,
@@ -13,7 +13,7 @@ from ._libchem_aux import (
     combo_counts,
     composition_per_cluster,
 )
-from ..bblean.similarity import jt_sim_matrix_between_packed
+from ..bitbirch import jt_sim_matrix_between_packed
 
 
 class LibComparison:
@@ -329,7 +329,7 @@ class LibComparison:
             print(f'Total number of medoids: {n_medoids}')
         
         # Create a new LibChem instance for combined medoids
-        from .libchem import LibChem
+        from .lib_chem import LibChem
         combined_lib = LibChem()
         
         # Shuffle the fingerprints before clustering
@@ -433,7 +433,7 @@ class LibComparison:
         sampled_flags = [sampled_flags[i] for i in indices]
 
         # create combined LibChem and load fingerprints
-        from .libchem import LibChem
+        from .lib_chem import LibChem
         combined_lib = LibChem()
         combined_lib.set_fingerprints(fingerprints=sampled_fps, packed=True)
         

@@ -1,5 +1,5 @@
-from iChem.libchem import LibChem, LibComparison
-from iChem.bblean import pack_fingerprints, unpack_fingerprints
+from iChem.libcomp import LibChem, LibComparison
+from iChem.bitbirch import pack_fingerprints, unpack_fingerprints
 import numpy as np # type: ignore
 import pytest # type: ignore
 from unittest.mock import patch

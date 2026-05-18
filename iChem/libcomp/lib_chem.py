@@ -1,10 +1,10 @@
 import numpy as np # type: ignore
 
-from ..bblean import pack_fingerprints, unpack_fingerprints
-from ..utils import binary_fps
-from ..utils import load_smiles as _load_smiles
-from ..bblean import BitBirch
-from ..bblean.similarity import jt_isim_packed, estimate_jt_std, jt_isim_medoid, jt_stratified_sampling
+from ..bitbirch import pack_fingerprints, unpack_fingerprints
+from ..utils.utils import binary_fps
+from ..utils.utils import load_smiles as _load_smiles
+from ..bitbirch import BitBirch
+from ..bitbirch import jt_isim_packed, estimate_jt_std, jt_isim_medoid, jt_stratified_sampling
 
 class LibChem:
     """Class for handling chemical libraries, including loading SMILES,

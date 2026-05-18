@@ -5,7 +5,7 @@ import seaborn as sns # type: ignore
 from seaborn import heatmap # type: ignore
 #import plotly.graph_objects as go
 from collections import Counter, defaultdict
-import iChem.bblean.similarity as iSIM
+import iChem.bitbirch.similarity as iSIM
 
 def clusters_pop_plot(bitbirch_obj,
                       save_path: str = None,

@@ -1,11 +1,11 @@
 import numpy as np # type: ignore
 import pandas as pd # type: ignore
-from .iSIM import calculate_isim
-from .iSIM.real import pair_jt, pair_rr, pair_sm
+from ..iSIM import calculate_isim
+from ..iSIM.real import pair_jt, pair_rr, pair_sm
 from rdkit import Chem, DataStructs # type: ignore
 from rdkit.Chem import Descriptors, rdFingerprintGenerator, MACCSkeys, SaltRemover # type: ignore
 from multiprocessing import Pool, cpu_count # type: ignore
-from ._config import CPU_CORES # type: ignore
+from .._config import CPU_CORES # type: ignore
 
 """
 This module contains utility functions for the iChem package regarding fingerprint generation, and 
@@ -569,27 +569,74 @@ def load_smiles_and_ids(file_path: str) -> tuple:
         
     return smiles, ids
 
-def load_multiple_smiles(dir_path: str, standarize: bool = False) -> list:
+def load_multiple_smiles(dir_path: str,
+                         standarize: bool = False,
+                         gzipped: bool = False) -> list:
     """
     This function loads SMILES strings from multiple files in a directory.
     
     Parameters:
-    dir_path: path to the directory containing files with SMILES strings
+    -----------
+    dir_path: str
+        Path to the directory containing files with SMILES strings
+    standarize: bool, default=False
+        Whether to standardize SMILES strings
+    gzipped: bool, default=False
+        If True, load .smi.gz files; if False, load .smi files
+    
+    Returns:
+    --------
+    smiles: list
+        List of SMILES strings
+    """
+    from pathlib import Path
+
+    dir_path = Path(dir_path)
+    file_pattern = '*.smi.gz' if gzipped else '*.smi'
+    loader_func = load_smiles_gzipped if gzipped else load_smiles
+
+    smiles_files = sorted(dir_path.glob(file_pattern))
+
+    all_smiles = []
+    for file in smiles_files:
+        smiles = loader_func(file, standarize=standarize)
+        all_smiles.extend(smiles)
+
+    return all_smiles
+
+def load_smiles_gzipped(file_path: str, standarize: bool = False) -> list:
+    """
+    This function loads SMILES strings from a gzipped file.
+    
+    Parameters:
+    file_path: path to the gzipped file containing SMILES strings
     
     Returns:
     smiles: list of SMILES strings
     """
-    import glob
+    import gzip
 
-    smiles_files = glob.glob(dir_path + '/*.smi')
-    smiles_files = sorted(smiles_files)
+    smiles = []
+    with gzip.open(file_path, 'rt') as f:
+        for line in f:
+            if line.strip():
+                smiles.append(line.split('\t', 1)[0].split(' ')[0].strip())
 
-    all_smiles = []
-    for file in smiles_files:
-        smiles = load_smiles(file)
-        all_smiles.extend(smiles)
-
-    return all_smiles
+    if standarize:
+        standardized_smiles = []
+        for smi in smiles:
+            try:
+                mol = Chem.MolFromSmiles(smi)
+                if mol is not None:
+                    standardized_mol = smiles_standarization(mol)
+                    standardized_smiles.append(Chem.MolToSmiles(standardized_mol))
+                else:
+                    print('Invalid SMILES: ', smi)
+            except Exception as e:
+                print(f'Error processing SMILES {smi}: {e}')
+        return standardized_smiles
+        
+    return smiles
 
 def smiles_standarization(mol) -> Chem.Mol:
     """

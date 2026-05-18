@@ -4,3 +4,4 @@ BitBIRCH-Lean is designed for high-thorouput clustering of huge molecular
 libraries (of up to hundreds of milliones of molecules).
 """
 from .cluster import cluster
+from bblean.bitbirch import BitBirch

@@ -1,5 +1,5 @@
 import pytest
-from iChem.bblean import BitBirch
+from iChem.bitbirch import BitBirch
 
 def test_bblean():
     assert True == True

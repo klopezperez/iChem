@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import pickle
+import json
 from pathlib import Path
 from typing import Sequence
 
@@ -13,6 +14,8 @@ from .bitbirch._hpc_initial_submit import prepare_initial_round_jobs
 from .bitbirch._hpc_midsection_submit import prepare_midsection_round_jobs
 from .bitbirch._hpc_final_submit import prepare_final_round_job
 from .bitbirch import _config
+from .utils.fingerprints import binary_fps, count_fps, real_fps
+import numpy as np
 
 
 def _print_banner() -> None:
@@ -137,6 +140,76 @@ def _build_parser() -> argparse.ArgumentParser:
     final_round_parser.add_argument("--slurm-time", default=_config.SLURM_TIME, help="SLURM time limit")
     final_round_parser.add_argument("--slurm-partition", default=_config.SLURM_PARTITION, help="SLURM partition (optional)")
     final_round_parser.add_argument("--verbose", action=argparse.BooleanOptionalAction, default=False)
+
+    # Fingerprint generation commands
+    binary_fps_parser = subparsers.add_parser(
+        "binary-fps", help="Generate binary fingerprints from SMILES"
+    )
+    binary_fps_parser.add_argument(
+        "input", type=Path, help="Input .smi, .smi.gz file or directory containing them"
+    )
+    binary_fps_parser.add_argument(
+        "--fp-type", default="ECFP4",
+        help="Fingerprint type ['RDKIT', 'ECFP4', 'ECFP6', 'AP', 'TT', 'MACCS']"
+    )
+    binary_fps_parser.add_argument(
+        "--n-bits", type=int, default=2048,
+        help="Number of bits for fingerprint (ignored for MACCS)"
+    )
+    binary_fps_parser.add_argument(
+        "--packed", action=argparse.BooleanOptionalAction, default=True,
+        help="Return packed fingerprints (default: True)"
+    )
+    binary_fps_parser.add_argument(
+        "--return-invalid", action=argparse.BooleanOptionalAction, default=False,
+        help="Return indices of invalid SMILES"
+    )
+    binary_fps_parser.add_argument(
+        "--standarize", action=argparse.BooleanOptionalAction, default=False,
+        help="Standardize molecules before generating fingerprints"
+    )
+    binary_fps_parser.add_argument(
+        "--out", type=Path, default=None,
+        help="Output .npy file for fingerprints (default: binary_fps.npy)"
+    )
+
+    count_fps_parser = subparsers.add_parser(
+        "count-fps", help="Generate count fingerprints from SMILES"
+    )
+    count_fps_parser.add_argument(
+        "input", type=Path, help="Input .smi, .smi.gz file or directory containing them"
+    )
+    count_fps_parser.add_argument(
+        "--fp-type", default="ECFP4",
+        help="Fingerprint type ['RDKIT', 'ECFP4', 'ECFP6']"
+    )
+    count_fps_parser.add_argument(
+        "--n-bits", type=int, default=2048,
+        help="Number of bits for fingerprint"
+    )
+    count_fps_parser.add_argument(
+        "--return-invalid", action=argparse.BooleanOptionalAction, default=False,
+        help="Return indices of invalid SMILES"
+    )
+    count_fps_parser.add_argument(
+        "--out", type=Path, default=None,
+        help="Output .npy file for fingerprints (default: count_fps.npy)"
+    )
+
+    real_fps_parser = subparsers.add_parser(
+        "real-fps", help="Generate real-valued fingerprints from RDKit descriptors"
+    )
+    real_fps_parser.add_argument(
+        "input", type=Path, help="Input .smi, .smi.gz file or directory containing them"
+    )
+    real_fps_parser.add_argument(
+        "--return-invalid", action=argparse.BooleanOptionalAction, default=False,
+        help="Return indices of invalid SMILES"
+    )
+    real_fps_parser.add_argument(
+        "--out", type=Path, default=None,
+        help="Output .npy file for fingerprints (default: real_fps.npy)"
+    )
 
     return parser
 
@@ -290,6 +363,125 @@ def _run_final_round(args: argparse.Namespace) -> int:
     return 0
 
 
+def _load_smiles(input_path: Path) -> list:
+    """Load SMILES from .smi or .smi.gz files."""
+    from .utils.utils import load_multiple_smiles, load_smiles, load_smiles_gzipped
+
+    if input_path.is_file():
+        if input_path.suffix == '.smi':
+            return load_smiles(input_path)
+        elif input_path.suffix == '.gz':
+            return load_smiles_gzipped(input_path)
+        else:
+            raise ValueError(f"Unsupported file format: {input_path.suffix}")
+    elif input_path.is_dir():
+        # Load both .smi and .smi.gz files from directory
+        smiles = []
+        smiles.extend(load_multiple_smiles(input_path, gzipped=False))
+        smiles.extend(load_multiple_smiles(input_path, gzipped=True))
+        return smiles
+    else:
+        raise FileNotFoundError(f"Input path not found: {input_path}")
+
+
+def _run_binary_fps(args: argparse.Namespace) -> int:
+    print("Loading SMILES...")
+    smiles = _load_smiles(args.input)
+    print(f"Loaded {len(smiles)} SMILES")
+
+    print("Generating binary fingerprints...")
+    if args.return_invalid:
+        fps, invalid_indices = binary_fps(
+            smiles,
+            fp_type=args.fp_type,
+            n_bits=args.n_bits,
+            return_invalid=True,
+            standarize=args.standarize,
+            packed=args.packed,
+        )
+        if invalid_indices:
+            print(f"Warning: {len(invalid_indices)} invalid SMILES found")
+            invalid_path = Path(args.out).parent / f"{Path(args.out).stem}_invalid_indices.json" if args.out else Path("binary_fps_invalid_indices.json")
+            with open(invalid_path, "w") as f:
+                json.dump(invalid_indices, f, indent=2)
+            print(f"✓ Saved {len(invalid_indices)} invalid indices to {invalid_path}")
+    else:
+        fps = binary_fps(
+            smiles,
+            fp_type=args.fp_type,
+            n_bits=args.n_bits,
+            return_invalid=False,
+            standarize=args.standarize,
+            packed=args.packed,
+        )
+
+    output_path = args.out if args.out else Path("binary_fps.npy")
+    np.save(output_path, fps)
+    print(f"✓ Saved {fps.shape[0]} fingerprints to {output_path}")
+
+    return 0
+
+
+def _run_count_fps(args: argparse.Namespace) -> int:
+    print("Loading SMILES...")
+    smiles = _load_smiles(args.input)
+    print(f"Loaded {len(smiles)} SMILES")
+
+    print("Generating count fingerprints...")
+    if args.return_invalid:
+        fps, invalid_indices = count_fps(
+            smiles,
+            fp_type=args.fp_type,
+            n_bits=args.n_bits,
+            return_invalid=True,
+        )
+        if invalid_indices:
+            print(f"Warning: {len(invalid_indices)} invalid SMILES found")
+            invalid_path = Path(args.out).parent / f"{Path(args.out).stem}_invalid_indices.json" if args.out else Path("count_fps_invalid_indices.json")
+            with open(invalid_path, "w") as f:
+                json.dump(invalid_indices, f, indent=2)
+            print(f"✓ Saved {len(invalid_indices)} invalid indices to {invalid_path}")
+    else:
+        fps = count_fps(
+            smiles,
+            fp_type=args.fp_type,
+            n_bits=args.n_bits,
+            return_invalid=False,
+        )
+
+    output_path = args.out if args.out else Path("count_fps.npy")
+    np.save(output_path, fps)
+    print(f"✓ Saved {fps.shape[0]} fingerprints to {output_path}")
+
+    return 0
+
+
+def _run_real_fps(args: argparse.Namespace) -> int:
+    print("Loading SMILES...")
+    smiles = _load_smiles(args.input)
+    print(f"Loaded {len(smiles)} SMILES")
+
+    print("Generating real-valued fingerprints...")
+    if args.return_invalid:
+        fps, invalid_indices = real_fps(
+            smiles, return_invalid=True
+        )
+        if invalid_indices:
+            print(f"Warning: {len(invalid_indices)} invalid SMILES found")
+            invalid_path = Path(args.out).parent / f"{Path(args.out).stem}_invalid_indices.json" if args.out else Path("real_fps_invalid_indices.json")
+            with open(invalid_path, "w") as f:
+                json.dump(invalid_indices, f, indent=2)
+            print(f"✓ Saved {len(invalid_indices)} invalid indices to {invalid_path}")
+    else:
+        fps = real_fps(smiles, return_invalid=False)
+
+    output_path = args.out if args.out else Path("real_fps.npy")
+    np.save(output_path, fps)
+    print(f"✓ Saved {fps.shape[0]} fingerprints to {output_path}")
+
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -306,6 +498,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_midsection_round(args)
     if args.command == "final-round":
         return _run_final_round(args)
+    if args.command == "binary-fps":
+        return _run_binary_fps(args)
+    if args.command == "count-fps":
+        return _run_count_fps(args)
+    if args.command == "real-fps":
+        return _run_real_fps(args)
     parser.error("Unknown command")
     return 2
 
