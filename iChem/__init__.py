@@ -33,4 +33,4 @@
 # ./LICENSES/GPL-3.0-only.txt.  If not, see <http://www.gnu.org/licenses/gpl-3.0.html>.
 import numpy as np
 from . import iSIM
-from . import utils
+from .utils import utils

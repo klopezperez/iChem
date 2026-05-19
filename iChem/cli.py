@@ -57,6 +57,9 @@ def _build_parser() -> argparse.ArgumentParser:
     cluster_parser.add_argument("--n-bits", type=int, default=_config.N_BITS)
     cluster_parser.add_argument("--branching-factor", type=int, default=_config.BRANCHING_FACTOR)
     cluster_parser.add_argument("--merge-criterion", default=_config.MERGE_CRITERION)
+    cluster_parser.add_argument("--recluster-iterations", type=int, default=_config.RECLUSTERING_ITERATIONS_INITIAL)
+    cluster_parser.add_argument("--recluster-extra-threshold", type=float, default=_config.RECLUSTERING_EXTRA_THRESHOLD)
+    cluster_parser.add_argument("--force-sequential", action=argparse.BooleanOptionalAction, default=False)
     cluster_parser.add_argument("--out", type=Path, default=None, help="Optional pickle output path")
     cluster_parser.add_argument("--verbose", action=argparse.BooleanOptionalAction, default=False)
 
@@ -222,8 +225,19 @@ def _run_cluster(args: argparse.Namespace) -> int:
         n_bits=args.n_bits,
         branching_factor=args.branching_factor,
         merge_criterion=args.merge_criterion,
+        recluster_iterations=args.recluster_iterations,
+        recluster_extra_threshold=args.recluster_extra_threshold,
         verbose=args.verbose,
+        force_sequential=args.force_sequential,
     )
+    
+    # Handle inconsistent return types:
+    # - mol_ids (list): save to pickle
+    # - 0 (int): multiround clustering (already saved internally)
+    if result == 0:
+        print("Multiround clustering completed. Results saved by multiround handler.")
+        return 0
+    
     if args.out is None:
         output_path = Path('cluster_output.pkl')
     else:

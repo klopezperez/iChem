@@ -55,16 +55,16 @@ import multiprocessing as mp
 from pathlib import Path
 
 from rich.console import Console  # type: ignore[import]
-import numpy as np
-from numpy.typing import NDArray
+import numpy as np # type: ignore
+from numpy.typing import NDArray # type: ignore
 
+from ._config import THRESHOLD, BRANCHING_FACTOR, MERGE_CRITERION
 
-from bblean._console import get_console
-from bblean._timer import Timer
-from bblean._config import DEFAULTS
-from bblean.utils import batched
-from bblean.bitbirch import BitBirch
-from bblean.fingerprints import _get_fps_file_num
+from bblean._console import get_console # type: ignore[import]
+from bblean._timer import Timer # type: ignore[import]
+from bblean.utils import batched # type: ignore[import]
+from bblean.bitbirch import BitBirch # type: ignore[import]
+from bblean.fingerprints import _get_fps_file_num # type: ignore[import]
 
 __all__ = ["run_multiround_reclustering"]
 
@@ -351,9 +351,9 @@ def run_multiround_reclustering(
     input_is_packed: bool = True,
     num_initial_processes: int = 10,
     num_midsection_processes: int | None = None,
-    merge_criterion: str = DEFAULTS.merge_criterion,
-    branching_factor: int = DEFAULTS.branching_factor,
-    threshold: float = DEFAULTS.threshold,
+    merge_criterion: str = MERGE_CRITERION,
+    branching_factor: int = BRANCHING_FACTOR,
+    threshold: float = THRESHOLD,
     midsection_threshold_change: float = 0.0,
     # Advanced
     num_midsection_rounds: int = 1,

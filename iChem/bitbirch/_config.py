@@ -33,3 +33,6 @@ SLURM_PARTITION = ""
 # HPC defaults
 FILES_PER_JOB = 10
 MAX_JOBS_PER_SCRIPT = 2000
+
+# Others
+VERBOSE = False

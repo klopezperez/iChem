@@ -1,22 +1,45 @@
 import gzip as gz
 from pathlib import Path
 
-import numpy as np
+import numpy as np # type: ignore
 
 from bblean.bitbirch import BitBirch # type: ignore
+from bblean.fingerprints import _get_fps_file_num # type: ignore
 
 from .optimal_threshold import optimal_threshold
-from ..utils import binary_fps, load_smiles
+from ..utils import binary_fps, load_smiles, load_smiles_gzipped
+from .multiround_reclustering import run_multiround_reclustering
+
+from ._config import (BRANCHING_FACTOR,
+                      MERGE_CRITERION,
+                      FINGERPRINT_TYPE,
+                      N_BITS,
+                      RECLUSTERING_ITERATIONS_INITIAL,
+                      RECLUSTERING_EXTRA_THRESHOLD,
+                      VERBOSE)
+
+
+def _npy_path_for(path: Path) -> Path:
+    """Return a Path in the same directory with all suffixes removed and
+    replaced by a single .npy suffix. Preserves parent directory.
+    Handles names like 'foo.smi.gz' -> 'foo.npy'.
+    """
+    base = path.name
+    for s in path.suffixes:
+        if base.endswith(s):
+            base = base[: -len(s)]
+    return path.with_name(base + '.npy')
 
 def cluster(file_path: str,
             threshold: float = None,
-            fp_type: str = 'ECFP4',
-            n_bits: int = 2048,
-            branching_factor: int = 1024,
-            merge_criterion: str = 'diameter',
-            recluster_iterations: int = 5,
-            recluster_extra_threshold: float = 0.025,
-            verbose: bool = False):
+            fp_type: str = FINGERPRINT_TYPE,
+            n_bits: int = N_BITS,
+            branching_factor: int = BRANCHING_FACTOR,
+            merge_criterion: str = MERGE_CRITERION,
+            recluster_iterations: int = RECLUSTERING_ITERATIONS_INITIAL,
+            recluster_extra_threshold: float = RECLUSTERING_EXTRA_THRESHOLD,
+            verbose: bool = VERBOSE,
+            force_sequential: bool = False):
     """Cluster the molecules using the best_practices recommendations on the
     paper.
 
@@ -48,27 +71,86 @@ def cluster(file_path: str,
         if file_path.name.endswith(('.smi', '.smi.gz')):
             if verbose:
                 print(f"Processing file: {file_path}")
-            return _cluster_from_smile_file(
-                file_path,
-                threshold,
-                fp_type,
-                n_bits,
-                branching_factor,
-                merge_criterion,
-                verbose,
+            # Generate the .npy file and then recurse cluster with the .npy file
+            npy_file_path = _prepare_fps_single(file_path, fp_type, n_bits, verbose)
+            return cluster(
+                npy_file_path,
+                threshold=threshold,
+                fp_type=fp_type,
+                n_bits=n_bits,
+                branching_factor=branching_factor,
+                merge_criterion=merge_criterion,
+                recluster_iterations=recluster_iterations,
+                recluster_extra_threshold=recluster_extra_threshold,
+                verbose=verbose,
+                force_sequential=force_sequential,
             )
         elif file_path.suffix == '.npy':
             if verbose:
                 print(f"Processing fingerprint file: {file_path}")
-            return _cluster_from_npy_file(
-                file_path,
-                threshold,
-                branching_factor,
-                merge_criterion,
-                recluster_iterations,
-                recluster_extra_threshold,
-                verbose,
-            )
+            n_mols = _get_fps_file_num(file_path)
+            if n_mols > 10_000_000:
+                print(f"Number of molecules in the file: {n_mols}")
+                print(
+                    "WARNING: We recommend using the multiround reclustering from CLI."
+                )
+                print(
+                    "Prepare the fingerprints in separate files and then use multiround."
+                )
+                return 0
+            if n_mols > 1_000_000 and force_sequential == False:
+                print(f"Number of molecules in the file: {n_mols}")
+                # Load the fps input file and split into number of initial processes
+                fps = np.load(file_path, mmap_mode="r")
+                num_initial_processes = 8
+                npy_paths = []
+                outdir = file_path.parent
+                for i in range(0, len(fps), len(fps) // num_initial_processes):
+                    if i + len(fps) // num_initial_processes < len(fps):
+                        np.save(outdir / f"temporary_fps_{i}.npy", fps[i : i + len(fps) // num_initial_processes])
+                        npy_paths.append(outdir / f"temporary_fps_{i}.npy")
+                    else:
+                        np.save(outdir / f"temporary_fps_{i}.npy", fps[i:])
+                        npy_paths.append(outdir / f"temporary_fps_{i}.npy")
+                if threshold is None:
+                    print("Estimating optimal threshold...")
+                    threshold = optimal_threshold(fps, factor=3.5)
+                    print(f"Optimal threshold estimated: {threshold:.4f}")
+                run_multiround_reclustering(
+                        input_files = npy_paths,
+                        out_dir= outdir,
+                        num_initial_processes = num_initial_processes,
+                        num_midsection_processes = 4,
+                        merge_criterion = merge_criterion,
+                        branching_factor = branching_factor,
+                        threshold = threshold,
+                        midsection_threshold_change = recluster_extra_threshold,
+                        # Advanced
+                        num_midsection_rounds = 1,
+                        bin_size = 8,
+                        save_tree = False,
+                        save_centroids = True,
+                        reclustering_iterations_initial = recluster_iterations,
+                        reclustering_iterations_midsection = recluster_iterations,
+                        reclustering_iterations_final = recluster_iterations,
+                        reclustering_extra_threshold = recluster_extra_threshold,
+                        # Debug
+                        verbose = False,
+                        cleanup = True,
+                        )
+                for npy_path in npy_paths:
+                    npy_path.unlink() # Remove the temporary files
+                return 0
+            else:
+                return _cluster_from_npy_file(
+                    file_path,
+                    threshold,
+                    branching_factor,
+                    merge_criterion,
+                    recluster_iterations,
+                    recluster_extra_threshold,
+                    verbose,
+                )
         raise ValueError(f"Unsupported file type: {file_path.suffix}")
     elif file_path.is_dir():
         # Read all .npy files in the directory and cluster them sequentially
@@ -81,33 +163,84 @@ def cluster(file_path: str,
             if verbose:
                 print(
                     f"Found {len(npy_files)} .npy files in directory. "
-                    "Clustering sequentially..."
                 )
-            return _cluster_from_directory_npy(
-                file_path,
-                threshold,
-                branching_factor,
-                merge_criterion,
-                recluster_iterations,
-                recluster_extra_threshold,
-                verbose
-            )
+            total_n_fingerprints = sum(_get_fps_file_num(npy_file) for npy_file in npy_files)
+            if total_n_fingerprints > 10_000_000:
+                print(f"Total number of fingerprints in the directory: {total_n_fingerprints}")
+                print(
+                    "WARNING: We recommend using the multiround reclustering from CLI."
+                )
+                print(
+                    "Use multiple middle rounds for more efficient and more memory efficient clustering."
+                )
+                return 0
+            if total_n_fingerprints > 1_000_000 and force_sequential == False:
+                print(f"Total number of fingerprints in the directory: {total_n_fingerprints}")
+                print(
+                    "Using multiround reclustering for the directory." \
+                    "This will be faster than sequential clustering." \
+                    "If you want to cluster sequentially, set force_sequential to True."
+                )
+                num_initial_processes = 8
+                output_dir = file_path.parent
+                if threshold is None:
+                    print("Estimating optimal threshold...")
+                    threshold = optimal_threshold(np.load(npy_files[0], mmap_mode='r'), factor=3.5)
+                    print(f"Optimal threshold estimated on first file: {threshold:.4f}")
+                run_multiround_reclustering(
+                            input_files = npy_files,
+                            out_dir= output_dir,
+                            num_initial_processes = num_initial_processes,
+                            num_midsection_processes = 4,
+                            merge_criterion = merge_criterion,
+                            branching_factor = branching_factor,
+                            threshold = threshold,
+                            midsection_threshold_change = recluster_extra_threshold,
+                            # Advanced
+                            num_midsection_rounds = 1,
+                            bin_size = 8,
+                            save_tree = False,
+                            save_centroids = True,
+                            reclustering_iterations_initial = recluster_iterations,
+                            reclustering_iterations_midsection = recluster_iterations,
+                            reclustering_extra_threshold = recluster_extra_threshold,
+                            # Debug
+                            verbose = False,
+                            cleanup = True,
+                            )
+            else:
+                print(f"Total number of fingerprints in the directory: {total_n_fingerprints}")
+                print(
+                    "Using sequential clustering for the directory." 
+                )
+                if threshold is None:
+                    print("Estimating optimal threshold...")
+                    threshold = optimal_threshold(np.load(npy_files[0], mmap_mode='r'), factor=3.5)
+                    print(f"Optimal threshold estimated on first file: {threshold:.4f}")
+                return _cluster_multiple_npy_sequential(
+                    npy_files,
+                    threshold,
+                    branching_factor,
+                    merge_criterion,
+                    recluster_iterations,
+                    recluster_extra_threshold,
+                    verbose,
+                )
         elif len(smi_files) > 0:
             if verbose:
                 print(
                     f"Found {len(smi_files)} .smi files in directory. "
                     "Clustering sequentially..."
                 )
-            return _cluster_from_directory_smile(
-                file_path,
+            npy_paths = _prepare_fps_directory(file_path, fp_type, n_bits, verbose)
+            return _cluster_multiple_npy_sequential(
+                npy_paths,
                 threshold,
-                fp_type,
-                n_bits,
                 branching_factor,
                 merge_criterion,
                 recluster_iterations,
                 recluster_extra_threshold,
-                verbose
+                verbose,
             )
         else:
             raise ValueError(f"No .npy or .smi files found in directory: {file_path}")
@@ -116,12 +249,19 @@ def cluster(file_path: str,
 
 def _cluster_from_npy_file(file_path: Path,
             threshold: float = None,
-            branching_factor: int = 1024,
-            merge_criterion: str = 'diameter',
-            recluster_iterations: int = 5,
-            recluster_extra_threshold: float = 0.025,
-            verbose: bool = False):
+            branching_factor: int = BRANCHING_FACTOR,
+            merge_criterion: str = MERGE_CRITERION,
+            recluster_iterations: int = RECLUSTERING_ITERATIONS_INITIAL,
+            recluster_extra_threshold: float = RECLUSTERING_EXTRA_THRESHOLD,
+            verbose: bool = VERBOSE):
     """Cluster the molecules from a single .npy file"""
+    if threshold is None:
+        if verbose:
+            print("Determining optimal threshold...")
+        threshold = optimal_threshold(np.load(file_path, mmap_mode='r'), factor=3.5)
+        if verbose:
+            print(f"Optimal threshold determined: {threshold:.4f}")
+
     # Create the BitBirch instance
     bb_object = BitBirch(
         merge_criterion=merge_criterion,
@@ -138,22 +278,14 @@ def _cluster_from_npy_file(file_path: Path,
     )
     return bb_object.get_cluster_mol_ids()
 
-def _cluster_from_smile_file(file_path: Path,
-            threshold: float = None,
-            fp_type: str = 'ECFP4',
-            n_bits: int = 2048,
-            branching_factor: int = 1024,
-            merge_criterion: str = 'diameter',
-            recluster_iterations: int = 5,
-            recluster_extra_threshold: float = 0.025,
-            verbose: bool = False):
-    """Cluster the molecules from a single .smi file"""
-    import gzip as gz
-
+def _prepare_fps_single(file_path: Path,
+            fp_type: str = FINGERPRINT_TYPE,
+            n_bits: int = N_BITS,
+            verbose: bool = VERBOSE):
+    """Prepare fingerprints from a single .smi or .smi.gz file"""
     # Check if the file is gzipped    
     if file_path.suffix == '.gz':
-        with gz.open(file_path, 'rt') as f:
-            smiles = [line.strip() for line in f]
+        smiles = load_smiles_gzipped(file_path)
     else:
         smiles = load_smiles(file_path)
 
@@ -166,17 +298,15 @@ def _cluster_from_smile_file(file_path: Path,
         return_invalid=True,
     )
 
-    if verbose:
-        print(f"Generated fingerprints for {len(fps)} molecules.")
-
     # Write the fingerprints to a .npy file
-    npy_file_path = file_path.with_suffix('.npy')
+    npy_file_path = _npy_path_for(file_path)
     np.save(npy_file_path, fps)
 
     # Drop the invalid smiles and rewrite the .smi
     if len(invalid_ids) > 0:
         if verbose:
             print(f"Warning: {len(invalid_ids)} invalid SMILES were skipped.")
+            print(f"Rewriting the .smi file with only valid SMILES.")
         valid_smiles = [smi for i, smi in enumerate(smiles) if i not in invalid_ids]
         if file_path.suffix == '.gz':
             corrected_file_path = file_path.with_name(
@@ -190,177 +320,75 @@ def _cluster_from_smile_file(file_path: Path,
             for smi in valid_smiles:
                 f.write(f"{smi}\n")
 
-    # Determine the optimal threshold if not provided
+    return npy_file_path
+
+def _cluster_multiple_npy_sequential(npy_files,
+            threshold: float = None,
+            branching_factor: int = BRANCHING_FACTOR,
+            merge_criterion: str = MERGE_CRITERION,
+            recluster_iterations: int = RECLUSTERING_ITERATIONS_INITIAL,
+            recluster_extra_threshold: float = RECLUSTERING_EXTRA_THRESHOLD,
+            verbose: bool = VERBOSE):
+    """Cluster the molecules from a list of .npy files sequentially.
+
+    `npy_files` may be a directory `Path` (in which case all `*.npy` files
+    will be read) or an iterable of `Path` objects.
+    """
+    # Normalize input to a sorted list of Paths
+    if isinstance(npy_files, (list, tuple)):
+        files = [Path(p) for p in npy_files]
+    else:
+        files = sorted(Path(npy_files).glob('*.npy'))
+
+    if len(files) == 0:
+        raise ValueError("No .npy files provided to _cluster_multiple_npy_sequential")
+
+    print(f"Clustering {len(files)} .npy files sequentially.")
+
+    # If no threshold provided, estimate it from the first file and use for all
     if threshold is None:
         if verbose:
-            print("Determining optimal threshold...")
-        threshold = optimal_threshold(fps, factor=3.5)
+            print(f"Estimating optimal threshold from first file: {files[0]}")
+        threshold = optimal_threshold(np.load(files[0], mmap_mode='r'), factor=3.5)
         if verbose:
-            print(f"Optimal threshold determined: {threshold:.4f}")
+            print(f"Estimated threshold: {threshold:.4f} (applied to all files)")
 
-    # Create the BitBirch instance
+    # Create the BitBirch instance with the fixed threshold
     bb_object = BitBirch(
         merge_criterion=merge_criterion,
         threshold=threshold,
         branching_factor=branching_factor,
     )
 
-    # Fit the fingerprints into the BitBirch model
-    bb_object.fit(npy_file_path)
-
-    # Recluster to decrease the number of clusters
-    bb_object.recluster_inplace(
-        iterations=recluster_iterations,
-        extra_threshold=recluster_extra_threshold,
-        verbose=verbose,
-    )
-
-    # Delete the temporary .npy file
-    npy_file_path.unlink()
-
-    return bb_object.get_cluster_mol_ids()
-
-def _cluster_from_directory_npy(dir_path: Path,
-            threshold: float = None,
-            branching_factor: int = 1024,
-            merge_criterion: str = 'diameter',
-            recluster_iterations: int = 5,
-            recluster_extra_threshold: float = 0.025,
-            verbose: bool = False):
-    """Cluster the molecules from all .npy files in a directory"""
-    print(f"Clustering all .npy files in directory: {dir_path}")
-    print(
-        "WARNING: This sequential clustering might not be optimal for sets "
-        "above 100 million molecules."
-    )
-    print("Consider using multiround for larger datasets.")
-
-    # Find all .npy files in the directory
-    npy_files = sorted(dir_path.glob('*.npy'))
-
-    # Create the BitBirch instance
-    bb_object = BitBirch(
-        merge_criterion=merge_criterion,
-        threshold=threshold,
-        branching_factor=branching_factor,
-    )
-
-    for npy_file in npy_files:
+    for k, npy_file in enumerate(files):
         if verbose:
-            print(f"Processing file: {npy_file}")
-        if threshold is None and npy_file == npy_files[0]:
-            # Determine threshold only for the first file if not provided.
-            if verbose:
-                print(f"Determining optimal threshold for file {npy_file}...")
-            threshold = optimal_threshold(
-                np.load(npy_file, mmap_mode='r'),
-                factor=3.5,
-            )
-            if verbose:
-                print(
-                    f"Optimal threshold determined for file {npy_file}: "
-                    f"{threshold:.4f}"
-                )
-                print(f"This threshold will be used for all files in the directory.")
-                print(
-                    "If other threshold wanted, please provide it as an "
-                    "argument to the function."
-                )
-            bb_object.threshold = threshold
+            print(f"Processing file {k+1}/{len(files)}: {npy_file}")
         bb_object.fit(npy_file)
-    
+
     # Recluster to decrease the number of clusters
     bb_object.recluster_inplace(
         iterations=recluster_iterations,
         extra_threshold=recluster_extra_threshold,
         verbose=verbose,
     )
-    
+
     return bb_object.get_cluster_mol_ids()
 
-def _cluster_from_directory_smile(dir_path: Path,
-            threshold: float = None,
-            fp_type: str = 'ECFP4',
-            n_bits: int = 2048,
-            branching_factor: int = 1024,
-            merge_criterion: str = 'diameter',
-            recluster_iterations: int = 5,
-            recluster_extra_threshold: float = 0.025,
-            verbose: bool = False):
-    """Cluster the molecules from all .smi files in a directory"""
-    print(f"Clustering all .smi files in directory: {dir_path}")
-    print(
-        "WARNING: This sequential clustering might not be optimal for sets "
-        "above 100 million molecules."
-    )
-    print("Consider using multiround for larger datasets.")
+def _prepare_fps_directory(dir_path: Path,
+            fp_type: str = FINGERPRINT_TYPE,
+            n_bits: int = N_BITS,
+            verbose: bool = VERBOSE):
+    """Prepare fingerprints for all .smi files in a directory"""
+    print(f"Preparing fingerprints for all .smi files in directory: {dir_path}")
+    print("WARNING: If you datasets are too big this might take a while.")
 
     # Find all .smi files in the directory
     smi_files = sorted(dir_path.glob('*.smi')) + sorted(dir_path.glob('*.smi.gz'))
 
-    # Create the BitBirch instance
-    bb_object = BitBirch(
-        merge_criterion=merge_criterion,
-        threshold=threshold,
-        branching_factor=branching_factor,
-    )
-
-    for smi_file in smi_files:
-        # Check if the file is gzipped
-        if smi_file.suffix == '.gz':
-            with gz.open(smi_file, 'rt') as f:
-                smiles = [line.strip() for line in f]
-        else:
-            smiles = load_smiles(smi_file)
-        temp_fps, invalid_ids = binary_fps(smiles,
-                                fp_type=fp_type,
-                                n_bits=n_bits,
-                                packed=True,
-                                return_invalid=True)
-        if invalid_ids:
-            if verbose:
-                print(
-                    f"Warning: {len(invalid_ids)} invalid SMILES were skipped in "
-                    f"file {smi_file}."
-                )
-            valid_smiles = [smi for i, smi in enumerate(smiles) if i not in invalid_ids]
-            if smi_file.suffix == '.gz':
-                corrected_file_path = smi_file.with_name(
-                    smi_file.name.replace('.smi.gz', '_valid.smi')
-                )
-            else:
-                corrected_file_path = smi_file.with_name(smi_file.stem + '_valid.smi')
-
-            # Rewrite the .smi file with only valid smiles
-            with open(corrected_file_path, 'w') as f:
-                for smi in valid_smiles:
-                    f.write(f"{smi}\n")
-        if threshold is None and smi_file == smi_files[0]:
-            # Determine threshold only for the first file if not provided.
-            if verbose:
-                print(f"Determining optimal threshold for file {smi_file}...")
-            threshold = optimal_threshold(temp_fps, factor=3.5)
-            if verbose:
-                print(
-                    f"Optimal threshold determined for file {smi_file}: "
-                    f"{threshold:.4f}"
-                )
-                print(f"This threshold will be used for all files in the directory.")
-                print(
-                    "If other threshold wanted, please provide it as an "
-                    "argument to the function."
-                )
-            bb_object.threshold = threshold
-        temp_npy_file = smi_file.with_suffix('.npy')
-        np.save(temp_npy_file, temp_fps)
-        bb_object.fit(temp_npy_file)
-        temp_npy_file.unlink()
-
-    # Recluster to decrease the number of clusters
-    bb_object.recluster_inplace(
-        iterations=recluster_iterations,
-        extra_threshold=recluster_extra_threshold,
-        verbose=verbose,
-    )
-
-    return bb_object.get_cluster_mol_ids()
+    npy_paths = []
+    for k, smi_file in enumerate(smi_files):
+        if verbose:
+            print(f"Processing file {k+1}/{len(smi_files)}: {smi_file}")
+        npy_path = _prepare_fps_single(smi_file, fp_type, n_bits, verbose)
+        npy_paths.append(npy_path)
+    return npy_paths
