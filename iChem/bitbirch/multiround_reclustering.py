@@ -283,7 +283,7 @@ class _FinalTreeMergingRound:
         self.save_tree = save_tree
         self.save_centroids = save_centroids
         self.reclustering_iterations = reclustering_iterations
-        self.extra_threshold = extra_threshold,
+        self.extra_threshold = extra_threshold
         self.verbose = verbose
 
     def __call__(self, batch_info: tuple[str, tp.Sequence[tuple[Path, Path]]]) -> None:
