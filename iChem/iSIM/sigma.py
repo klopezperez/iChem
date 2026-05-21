@@ -2,7 +2,7 @@ import numpy as np # type: ignore
 import pandas as pd # type: ignore
 from joblib import Parallel, delayed, parallel_backend # type: ignore
 from .sampling import stratified_sampling
-from ..utils import pairwise_average, rdkit_pairwise_sim
+from ..utils.utils import pairwise_average, rdkit_pairwise_sim
 from .real import calculate_comp_sim_real, pairwise_average_real
 
 def get_stdev_russell_fast(arr):
