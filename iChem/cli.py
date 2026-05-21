@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import argparse
-import pickle
 import json
+import time
 from pathlib import Path
 from typing import Sequence
 
@@ -60,7 +60,8 @@ def _build_parser() -> argparse.ArgumentParser:
     cluster_parser.add_argument("--recluster-iterations", type=int, default=_config.RECLUSTERING_ITERATIONS_INITIAL)
     cluster_parser.add_argument("--recluster-extra-threshold", type=float, default=_config.RECLUSTERING_EXTRA_THRESHOLD)
     cluster_parser.add_argument("--force-sequential", action=argparse.BooleanOptionalAction, default=False)
-    cluster_parser.add_argument("--out", type=Path, default=None, help="Optional pickle output path")
+    cluster_parser.add_argument("--save-tree", action=argparse.BooleanOptionalAction, default=_config.SAVE_TREE)
+    cluster_parser.add_argument("--save-centroids", action=argparse.BooleanOptionalAction, default=_config.SAVE_CENTROIDS)
     cluster_parser.add_argument("--verbose", action=argparse.BooleanOptionalAction, default=False)
 
     multiround_parser = subparsers.add_parser("multiround", help="Run multi-round clustering")
@@ -77,8 +78,8 @@ def _build_parser() -> argparse.ArgumentParser:
     multiround_parser.add_argument("--num-midsection-rounds", type=int, default=_config.NUM_MIDSECTION_ROUNDS)
     multiround_parser.add_argument("--bin-size", type=int, default=_config.BIN_SIZE)
     multiround_parser.add_argument("--max-tasks-per-process", type=int, default=1)
-    multiround_parser.add_argument("--save-tree", action=argparse.BooleanOptionalAction, default=False)
-    multiround_parser.add_argument("--save-centroids", action=argparse.BooleanOptionalAction, default=True)
+    multiround_parser.add_argument("--save-tree", action=argparse.BooleanOptionalAction, default=_config.SAVE_TREE)
+    multiround_parser.add_argument("--save-centroids", action=argparse.BooleanOptionalAction, default=_config.SAVE_CENTROIDS)
     multiround_parser.add_argument("--reclustering-iterations-initial", type=int, default=_config.RECLUSTERING_ITERATIONS_INITIAL)
     multiround_parser.add_argument("--reclustering-iterations-midsection", type=int, default=_config.RECLUSTERING_ITERATIONS_MIDSECTION)
     multiround_parser.add_argument("--reclustering-iterations-final", type=int, default=_config.RECLUSTERING_ITERATIONS_FINAL)
@@ -218,6 +219,9 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _run_cluster(args: argparse.Namespace) -> int:
+    t0 = time.perf_counter()
+    print(f"[cluster] Started at {time.strftime('%Y-%m-%d %H:%M:%S')}")
+
     result = cluster(
         args.input,
         threshold=args.threshold,
@@ -229,23 +233,18 @@ def _run_cluster(args: argparse.Namespace) -> int:
         recluster_extra_threshold=args.recluster_extra_threshold,
         verbose=args.verbose,
         force_sequential=args.force_sequential,
+        save_tree=args.save_tree,
+        save_centroids=args.save_centroids,
     )
-    
-    # Handle inconsistent return types:
-    # - mol_ids (list): save to pickle
-    # - 0 (int): multiround clustering (already saved internally)
+
+    elapsed = time.perf_counter() - t0
+    print(f"[cluster] Finished in {elapsed:.2f} s")
+
+    # 0 means multiround path; non-zero sequential results are saved in cluster.py
     if result == 0:
         print("Multiround clustering completed. Results saved by multiround handler.")
-        return 0
-    
-    if args.out is None:
-        output_path = Path('cluster_output.pkl')
     else:
-        output_path = args.out
-
-    with open(output_path, "wb") as handle:
-        pickle.dump(result, handle)
-    print(f"Saved clustering output to {output_path}")
+        print("Sequential clustering completed. Results saved as clusters.pkl near the input fingerprints.")
     return 0
 
 
@@ -255,6 +254,9 @@ def _run_multiround(args: argparse.Namespace) -> int:
         input_files.extend(_path_list(str(value)))
     if not input_files:
         raise ValueError("No input files were found")
+
+    t0 = time.perf_counter()
+    print(f"[multiround] Started at {time.strftime('%Y-%m-%d %H:%M:%S')}")
 
     timer = run_multiround_reclustering(
         input_files=input_files,
@@ -280,6 +282,8 @@ def _run_multiround(args: argparse.Namespace) -> int:
         verbose=args.verbose,
         cleanup=args.cleanup,
     )
+    elapsed = time.perf_counter() - t0
+    print(f"[multiround] Finished in {elapsed:.2f} s")
     print(timer)
     return 0
 
@@ -313,12 +317,12 @@ def _run_initial_round(args: argparse.Namespace) -> int:
     if isinstance(script_paths, list):
         print(f"\n✓ Generated {len(script_paths)} submission scripts:")
         for i, path in enumerate(script_paths, 1):
-            print(f"  {i}. {path}")
+            print(f"  {i}. bash {Path(path).resolve()}")
         print(f"\nRun each script to submit batches of jobs (max {args.max_jobs_per_script} per script)")
     else:
         print(f"\n✓ Generated submission script: {script_paths}")
         print(f"Run the following to submit all initial round jobs:")
-        print(f"\n  ./{script_paths.name}\n")
+        print(f"\n  bash {Path(script_paths).resolve()}\n")
     return 0
 
 
@@ -344,12 +348,12 @@ def _run_midsection_round(args: argparse.Namespace) -> int:
     if isinstance(script_paths, list):
         print(f"\n✓ Generated {len(script_paths)} submission scripts:")
         for i, path in enumerate(script_paths, 1):
-            print(f"  {i}. {path}")
+            print(f"  {i}. bash {Path(path).resolve()}")
         print(f"\nRun each script to submit batches of jobs (max {args.max_jobs_per_script} per script)")
     else:
         print(f"\n✓ Generated submission script: {script_paths}")
         print(f"Run the following to submit all midsection round jobs:")
-        print(f"\n  ./{script_paths.name}\n")
+        print(f"\n  bash {Path(script_paths).resolve()}\n")
     return 0
 
 
@@ -373,7 +377,7 @@ def _run_final_round(args: argparse.Namespace) -> int:
 
     print(f"\n✓ Generated submission script: {script_path}")
     print(f"Run the following to submit the final round job:")
-    print(f"\n  ./{script_path.name}\n")
+    print(f"\n  bash {Path(script_path).resolve()}\n")
     return 0
 
 

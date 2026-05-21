@@ -1,4 +1,5 @@
 import gzip as gz
+import pickle
 from pathlib import Path
 
 import numpy as np # type: ignore
@@ -14,6 +15,8 @@ from ._config import (BRANCHING_FACTOR,
                       MERGE_CRITERION,
                       FINGERPRINT_TYPE,
                       N_BITS,
+                      SAVE_TREE,
+                      SAVE_CENTROIDS,
                       RECLUSTERING_ITERATIONS_INITIAL,
                       RECLUSTERING_EXTRA_THRESHOLD,
                       VERBOSE)
@@ -39,7 +42,9 @@ def cluster(file_path: str,
             recluster_iterations: int = RECLUSTERING_ITERATIONS_INITIAL,
             recluster_extra_threshold: float = RECLUSTERING_EXTRA_THRESHOLD,
             verbose: bool = VERBOSE,
-            force_sequential: bool = False):
+            force_sequential: bool = False,
+            save_tree: bool = SAVE_TREE,
+            save_centroids: bool = SAVE_CENTROIDS):
     """Cluster the molecules using the best_practices recommendations on the
     paper.
 
@@ -84,6 +89,8 @@ def cluster(file_path: str,
                 recluster_extra_threshold=recluster_extra_threshold,
                 verbose=verbose,
                 force_sequential=force_sequential,
+                save_tree=save_tree,
+                save_centroids=save_centroids,
             )
         elif file_path.suffix == '.npy':
             if verbose:
@@ -100,18 +107,19 @@ def cluster(file_path: str,
                 return 0
             if n_mols > 1_000_000 and force_sequential == False:
                 print(f"Number of molecules in the file: {n_mols}")
+                print(
+                    "Using multiround reclustering for the file." \
+                    "If you want to cluster sequentially, use the --force-sequential flag."
+                )
                 # Load the fps input file and split into number of initial processes
                 fps = np.load(file_path, mmap_mode="r")
-                num_initial_processes = 8
+                num_initial_processes = 4
                 npy_paths = []
                 outdir = file_path.parent
-                for i in range(0, len(fps), len(fps) // num_initial_processes):
-                    if i + len(fps) // num_initial_processes < len(fps):
-                        np.save(outdir / f"temporary_fps_{i}.npy", fps[i : i + len(fps) // num_initial_processes])
-                        npy_paths.append(outdir / f"temporary_fps_{i}.npy")
-                    else:
-                        np.save(outdir / f"temporary_fps_{i}.npy", fps[i:])
-                        npy_paths.append(outdir / f"temporary_fps_{i}.npy")
+                for i, chunk in enumerate(np.array_split(fps, num_initial_processes)):
+                    npy_path = outdir / f"temporary_fps_{i}.npy"
+                    np.save(npy_path, chunk)
+                    npy_paths.append(npy_path)
                 if threshold is None:
                     print("Estimating optimal threshold...")
                     threshold = optimal_threshold(fps, factor=3.5)
@@ -120,37 +128,44 @@ def cluster(file_path: str,
                         input_files = npy_paths,
                         out_dir= outdir,
                         num_initial_processes = num_initial_processes,
-                        num_midsection_processes = 4,
+                        num_midsection_processes = 2,
                         merge_criterion = merge_criterion,
                         branching_factor = branching_factor,
                         threshold = threshold,
-                        midsection_threshold_change = recluster_extra_threshold,
+                        midsection_threshold_change = 0,
                         # Advanced
                         num_midsection_rounds = 1,
-                        bin_size = 8,
-                        save_tree = False,
-                        save_centroids = True,
+                        bin_size = 4,
+                        save_tree = save_tree,
+                        save_centroids = save_centroids,
                         reclustering_iterations_initial = recluster_iterations,
                         reclustering_iterations_midsection = recluster_iterations,
                         reclustering_iterations_final = recluster_iterations,
                         reclustering_extra_threshold = recluster_extra_threshold,
                         # Debug
-                        verbose = False,
+                        verbose = verbose,
                         cleanup = True,
                         )
                 for npy_path in npy_paths:
                     npy_path.unlink() # Remove the temporary files
                 return 0
             else:
-                return _cluster_from_npy_file(
+                print(f"Number of molecules in the file: {n_mols}")
+                print(
+                    "Using sequential clustering for the file."
+                )
+                cluster_ids = _cluster_from_npy_file(
                     file_path,
                     threshold,
                     branching_factor,
                     merge_criterion,
                     recluster_iterations,
                     recluster_extra_threshold,
+                    save_tree,
+                    save_centroids,
                     verbose,
                 )
+                return cluster_ids
         raise ValueError(f"Unsupported file type: {file_path.suffix}")
     elif file_path.is_dir():
         # Read all .npy files in the directory and cluster them sequentially
@@ -158,6 +173,23 @@ def cluster(file_path: str,
 
         # Read all .smi files in the directory and cluster them sequentially
         smi_files = sorted(file_path.glob('*.smi')) + sorted(file_path.glob('*.smi.gz'))
+
+        # If only one .npy file, treat it as a single file input
+        if len(npy_files) == 1:
+            return cluster(
+                str(npy_files[0]),
+                threshold=threshold,
+                fp_type=fp_type,
+                n_bits=n_bits,
+                branching_factor=branching_factor,
+                merge_criterion=merge_criterion,
+                recluster_iterations=recluster_iterations,
+                recluster_extra_threshold=recluster_extra_threshold,
+                verbose=verbose,
+                force_sequential=force_sequential,
+                save_tree=save_tree,
+                save_centroids=save_centroids,
+            )
 
         if len(npy_files) > 0:
             if verbose:
@@ -174,38 +206,41 @@ def cluster(file_path: str,
                     "Use multiple middle rounds for more efficient and more memory efficient clustering."
                 )
                 return 0
+            # Estimate threshold once if not provided
+            if threshold is None:
+                if verbose:
+                    print("Estimating optimal threshold...")
+                threshold = optimal_threshold(np.load(npy_files[0], mmap_mode='r'), factor=3.5)
+                if verbose:
+                    print(f"Optimal threshold estimated on first file: {threshold:.4f}")
             if total_n_fingerprints > 1_000_000 and force_sequential == False:
                 print(f"Total number of fingerprints in the directory: {total_n_fingerprints}")
                 print(
                     "Using multiround reclustering for the directory." \
                     "This will be faster than sequential clustering." \
-                    "If you want to cluster sequentially, set force_sequential to True."
+                    "If you want to cluster sequentially, use the --force-sequential flag."
                 )
-                num_initial_processes = 8
-                output_dir = file_path.parent
-                if threshold is None:
-                    print("Estimating optimal threshold...")
-                    threshold = optimal_threshold(np.load(npy_files[0], mmap_mode='r'), factor=3.5)
-                    print(f"Optimal threshold estimated on first file: {threshold:.4f}")
+                num_initial_processes = 4
+                output_dir = file_path
                 run_multiround_reclustering(
                             input_files = npy_files,
                             out_dir= output_dir,
                             num_initial_processes = num_initial_processes,
-                            num_midsection_processes = 4,
+                            num_midsection_processes = 2,
                             merge_criterion = merge_criterion,
                             branching_factor = branching_factor,
                             threshold = threshold,
-                            midsection_threshold_change = recluster_extra_threshold,
+                            midsection_threshold_change = 0,
                             # Advanced
                             num_midsection_rounds = 1,
-                            bin_size = 8,
-                            save_tree = False,
-                            save_centroids = True,
+                            bin_size = 4,
+                            save_tree = save_tree,
+                            save_centroids = save_centroids,
                             reclustering_iterations_initial = recluster_iterations,
                             reclustering_iterations_midsection = recluster_iterations,
                             reclustering_extra_threshold = recluster_extra_threshold,
                             # Debug
-                            verbose = False,
+                            verbose = verbose,
                             cleanup = True,
                             )
             else:
@@ -213,39 +248,59 @@ def cluster(file_path: str,
                 print(
                     "Using sequential clustering for the directory." 
                 )
-                if threshold is None:
-                    print("Estimating optimal threshold...")
-                    threshold = optimal_threshold(np.load(npy_files[0], mmap_mode='r'), factor=3.5)
-                    print(f"Optimal threshold estimated on first file: {threshold:.4f}")
-                return _cluster_multiple_npy_sequential(
+                cluster_ids = _cluster_multiple_npy_sequential(
                     npy_files,
                     threshold,
                     branching_factor,
                     merge_criterion,
                     recluster_iterations,
                     recluster_extra_threshold,
+                    file_path,
+                    save_tree,
+                    save_centroids,
                     verbose,
                 )
+                return cluster_ids
         elif len(smi_files) > 0:
             if verbose:
                 print(
                     f"Found {len(smi_files)} .smi files in directory. "
-                    "Clustering sequentially..."
+                    "Preaparing fingerprints for clustering."
                 )
             npy_paths = _prepare_fps_directory(file_path, fp_type, n_bits, verbose)
-            return _cluster_multiple_npy_sequential(
-                npy_paths,
-                threshold,
-                branching_factor,
-                merge_criterion,
-                recluster_iterations,
-                recluster_extra_threshold,
-                verbose,
+            # Recurse on the directory so `cluster()` can detect the newly
+            # created .npy files and decide whether to run multiround or
+            # sequential clustering based on their count/size.
+            return cluster(
+                file_path,
+                threshold=threshold,
+                fp_type=fp_type,
+                n_bits=n_bits,
+                branching_factor=branching_factor,
+                merge_criterion=merge_criterion,
+                recluster_iterations=recluster_iterations,
+                recluster_extra_threshold=recluster_extra_threshold,
+                verbose=verbose,
+                force_sequential=force_sequential,
+                save_tree=save_tree,
+                save_centroids=save_centroids,
             )
         else:
             raise ValueError(f"No .npy or .smi files found in directory: {file_path}")
     else:
         raise ValueError(f"Invalid input path: {file_path}")
+
+
+def _save_clusters(output_dir: Path, cluster_ids, verbose: bool = VERBOSE) -> Path:
+    """Persist sequential clustering output to clusters.pkl in output_dir."""
+    output_path = Path(output_dir) / "clusters.pkl"
+    with open(output_path, "wb") as handle:
+        pickle.dump(cluster_ids, handle)
+    if verbose:
+        print(f"Saved clustering output to {output_path}")
+    else:
+        print(f"Saved clustering output to {output_path}")
+    return output_path
 
 def _cluster_from_npy_file(file_path: Path,
             threshold: float = None,
@@ -253,6 +308,8 @@ def _cluster_from_npy_file(file_path: Path,
             merge_criterion: str = MERGE_CRITERION,
             recluster_iterations: int = RECLUSTERING_ITERATIONS_INITIAL,
             recluster_extra_threshold: float = RECLUSTERING_EXTRA_THRESHOLD,
+            save_tree: bool = SAVE_TREE,
+            save_centroids: bool = SAVE_CENTROIDS,
             verbose: bool = VERBOSE):
     """Cluster the molecules from a single .npy file"""
     if threshold is None:
@@ -276,7 +333,28 @@ def _cluster_from_npy_file(file_path: Path,
         extra_threshold=recluster_extra_threshold,
         verbose=verbose,
     )
-    return bb_object.get_cluster_mol_ids()
+
+    if save_tree:
+        bb_object.save(file_path.parent / "bitbirch.pkl")
+        if verbose:
+            print(f"Saved BitBirch tree to {file_path.parent / 'bitbirch.pkl'}")
+
+    if save_centroids:
+        output = bb_object.get_centroids_mol_ids()
+        with open(file_path.parent / "clusters.pkl", mode="wb") as f:
+            pickle.dump(output["mol_ids"], f)
+        with open(file_path.parent / "cluster-centroids-packed.pkl", mode="wb") as f:
+            pickle.dump(output["centroids"], f)
+        if verbose:
+            print(f"Saved clusters to {file_path.parent / 'clusters.pkl'}")
+            print(
+                f"Saved packed centroids to {file_path.parent / 'cluster-centroids-packed.pkl'}"
+            )
+        return output["mol_ids"]
+
+    cluster_ids = bb_object.get_cluster_mol_ids()
+    _save_clusters(file_path.parent, cluster_ids, verbose)
+    return cluster_ids
 
 def _prepare_fps_single(file_path: Path,
             fp_type: str = FINGERPRINT_TYPE,
@@ -328,6 +406,9 @@ def _cluster_multiple_npy_sequential(npy_files,
             merge_criterion: str = MERGE_CRITERION,
             recluster_iterations: int = RECLUSTERING_ITERATIONS_INITIAL,
             recluster_extra_threshold: float = RECLUSTERING_EXTRA_THRESHOLD,
+            output_dir: Path | None = None,
+            save_tree: bool = SAVE_TREE,
+            save_centroids: bool = SAVE_CENTROIDS,
             verbose: bool = VERBOSE):
     """Cluster the molecules from a list of .npy files sequentially.
 
@@ -372,7 +453,29 @@ def _cluster_multiple_npy_sequential(npy_files,
         verbose=verbose,
     )
 
-    return bb_object.get_cluster_mol_ids()
+    resolved_output_dir = Path(output_dir) if output_dir is not None else files[0].parent
+
+    if save_tree:
+        bb_object.save(resolved_output_dir / "bitbirch.pkl")
+        if verbose:
+            print(f"Saved BitBirch tree to {resolved_output_dir / 'bitbirch.pkl'}")
+
+    if save_centroids:
+        output = bb_object.get_centroids_mol_ids()
+        with open(resolved_output_dir / "clusters.pkl", mode="wb") as f:
+            pickle.dump(output["mol_ids"], f)
+        with open(resolved_output_dir / "cluster-centroids-packed.pkl", mode="wb") as f:
+            pickle.dump(output["centroids"], f)
+        if verbose:
+            print(f"Saved clusters to {resolved_output_dir / 'clusters.pkl'}")
+            print(
+                f"Saved packed centroids to {resolved_output_dir / 'cluster-centroids-packed.pkl'}"
+            )
+        return output["mol_ids"]
+
+    cluster_ids = bb_object.get_cluster_mol_ids()
+    _save_clusters(resolved_output_dir, cluster_ids, verbose)
+    return cluster_ids
 
 def _prepare_fps_directory(dir_path: Path,
             fp_type: str = FINGERPRINT_TYPE,
