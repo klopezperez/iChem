@@ -1,7 +1,7 @@
 import numpy as np
 import pickle as pkl
 from pathlib import Path
-from bblean.similarity import jt_isim_medoid, jt_sim_packed
+from bblean.similarity import jt_isim_medoid, jt_sim_packed #type: ignore
 from ..utils.utils import binary_fps, load_smiles, load_smiles_gzipped
 
 def _singletons_sampling(clusters: list[list[int]],
