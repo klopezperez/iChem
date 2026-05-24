@@ -15,6 +15,7 @@ from .bitbirch._hpc_midsection_submit import prepare_midsection_round_jobs
 from .bitbirch._hpc_final_submit import prepare_final_round_job
 from .bitbirch import _config
 from .utils.fingerprints import binary_fps, count_fps, real_fps
+from ._cli import load_smiles, get_smi_files, get_output_path
 import numpy as np
 
 
@@ -165,12 +166,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Return packed fingerprints (default: True)"
     )
     binary_fps_parser.add_argument(
-        "--return-invalid", action=argparse.BooleanOptionalAction, default=False,
+        "--return-invalid", action=argparse.BooleanOptionalAction, default=True,
         help="Return indices of invalid SMILES"
     )
     binary_fps_parser.add_argument(
         "--standarize", action=argparse.BooleanOptionalAction, default=False,
         help="Standardize molecules before generating fingerprints"
+    )
+    binary_fps_parser.add_argument(
+        "--n-processes", type=int, default=None,
+        help="Number of processes for parallelization (default: min(available_cpus, 32))"
     )
     binary_fps_parser.add_argument(
         "--out", type=Path, default=None,
@@ -192,8 +197,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Number of bits for fingerprint"
     )
     count_fps_parser.add_argument(
-        "--return-invalid", action=argparse.BooleanOptionalAction, default=False,
+        "--return-invalid", action=argparse.BooleanOptionalAction, default=True,
         help="Return indices of invalid SMILES"
+    )
+    count_fps_parser.add_argument(
+        "--n-processes", type=int, default=None,
+        help="Number of processes for parallelization (default: min(available_cpus, 32))"
     )
     count_fps_parser.add_argument(
         "--out", type=Path, default=None,
@@ -207,7 +216,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "input", type=Path, help="Input .smi, .smi.gz file or directory containing them"
     )
     real_fps_parser.add_argument(
-        "--return-invalid", action=argparse.BooleanOptionalAction, default=False,
+        "--return-invalid", action=argparse.BooleanOptionalAction, default=True,
         help="Return indices of invalid SMILES"
     )
     real_fps_parser.add_argument(
@@ -381,121 +390,152 @@ def _run_final_round(args: argparse.Namespace) -> int:
     return 0
 
 
-def _load_smiles(input_path: Path) -> list:
-    """Load SMILES from .smi or .smi.gz files."""
-    from .utils.utils import load_multiple_smiles, load_smiles, load_smiles_gzipped
-
-    if input_path.is_file():
-        if input_path.suffix == '.smi':
-            return load_smiles(input_path)
-        elif input_path.suffix == '.gz':
-            return load_smiles_gzipped(input_path)
-        else:
-            raise ValueError(f"Unsupported file format: {input_path.suffix}")
-    elif input_path.is_dir():
-        # Load both .smi and .smi.gz files from directory
-        smiles = []
-        smiles.extend(load_multiple_smiles(input_path, gzipped=False))
-        smiles.extend(load_multiple_smiles(input_path, gzipped=True))
-        return smiles
-    else:
-        raise FileNotFoundError(f"Input path not found: {input_path}")
-
-
 def _run_binary_fps(args: argparse.Namespace) -> int:
-    print("Loading SMILES...")
-    smiles = _load_smiles(args.input)
-    print(f"Loaded {len(smiles)} SMILES")
+    smi_files = get_smi_files(args.input)
+    
+    if not smi_files:
+        raise ValueError(f"No .smi or .smi.gz files found in {args.input}")
+    
+    output_dir = args.input if args.input.is_dir() else args.input.parent
+    
+    for smi_file in smi_files:
+        print(f"\nProcessing: {smi_file.name}")
+        print("Loading SMILES...")
+        smiles = load_smiles(smi_file)
+        print(f"Loaded {len(smiles)} SMILES")
 
-    print("Generating binary fingerprints...")
-    if args.return_invalid:
-        fps, invalid_indices = binary_fps(
-            smiles,
-            fp_type=args.fp_type,
-            n_bits=args.n_bits,
-            return_invalid=True,
-            standarize=args.standarize,
-            packed=args.packed,
-        )
-        if invalid_indices:
-            print(f"Warning: {len(invalid_indices)} invalid SMILES found")
-            invalid_path = Path(args.out).parent / f"{Path(args.out).stem}_invalid_indices.json" if args.out else Path("binary_fps_invalid_indices.json")
-            with open(invalid_path, "w") as f:
-                json.dump(invalid_indices, f, indent=2)
-            print(f"✓ Saved {len(invalid_indices)} invalid indices to {invalid_path}")
-    else:
-        fps = binary_fps(
-            smiles,
-            fp_type=args.fp_type,
-            n_bits=args.n_bits,
-            return_invalid=False,
-            standarize=args.standarize,
-            packed=args.packed,
-        )
+        print("Generating binary fingerprints...")
+        t0 = time.perf_counter()
+        if args.return_invalid:
+            fps, invalid_indices = binary_fps(
+                smiles,
+                fp_type=args.fp_type,
+                n_bits=args.n_bits,
+                return_invalid=True,
+                standarize=args.standarize,
+                packed=args.packed,
+                n_processes=args.n_processes,
+            )
+            if invalid_indices:
+                print(f"Warning: {len(invalid_indices)} invalid SMILES found")
+                invalid_path = output_dir / f"{smi_file.stem}_invalid_indices.json"
+                with open(invalid_path, "w") as f:
+                    json.dump(invalid_indices, f, indent=2)
+                print(f"✓ Saved {len(invalid_indices)} invalid indices to {invalid_path}")
+        else:
+            fps = binary_fps(
+                smiles,
+                fp_type=args.fp_type,
+                n_bits=args.n_bits,
+                return_invalid=False,
+                standarize=args.standarize,
+                packed=args.packed,
+                n_processes=args.n_processes,
+            )
+        elapsed = time.perf_counter() - t0
+        print(f"✓ Generated in {elapsed:.2f}s")
 
-    output_path = args.out if args.out else Path("binary_fps.npy")
-    np.save(output_path, fps)
-    print(f"✓ Saved {fps.shape[0]} fingerprints to {output_path}")
+        if args.out:
+            output_path = args.out
+        else:
+            output_path = get_output_path(smi_file, args.fp_type, '.npy', output_dir)
+        
+        np.save(output_path, fps)
+        print(f"✓ Saved {fps.shape[0]} fingerprints to {output_path}")
 
     return 0
 
 
 def _run_count_fps(args: argparse.Namespace) -> int:
-    print("Loading SMILES...")
-    smiles = _load_smiles(args.input)
-    print(f"Loaded {len(smiles)} SMILES")
+    smi_files = get_smi_files(args.input)
+    
+    if not smi_files:
+        raise ValueError(f"No .smi or .smi.gz files found in {args.input}")
+    
+    output_dir = args.input if args.input.is_dir() else args.input.parent
+    
+    for smi_file in smi_files:
+        print(f"\nProcessing: {smi_file.name}")
+        print("Loading SMILES...")
+        smiles = load_smiles(smi_file)
+        print(f"Loaded {len(smiles)} SMILES")
 
-    print("Generating count fingerprints...")
-    if args.return_invalid:
-        fps, invalid_indices = count_fps(
-            smiles,
-            fp_type=args.fp_type,
-            n_bits=args.n_bits,
-            return_invalid=True,
-        )
-        if invalid_indices:
-            print(f"Warning: {len(invalid_indices)} invalid SMILES found")
-            invalid_path = Path(args.out).parent / f"{Path(args.out).stem}_invalid_indices.json" if args.out else Path("count_fps_invalid_indices.json")
-            with open(invalid_path, "w") as f:
-                json.dump(invalid_indices, f, indent=2)
-            print(f"✓ Saved {len(invalid_indices)} invalid indices to {invalid_path}")
-    else:
-        fps = count_fps(
-            smiles,
-            fp_type=args.fp_type,
-            n_bits=args.n_bits,
-            return_invalid=False,
-        )
+        print("Generating count fingerprints...")
+        t0 = time.perf_counter()
+        if args.return_invalid:
+            fps, invalid_indices = count_fps(
+                smiles,
+                fp_type=args.fp_type,
+                n_bits=args.n_bits,
+                return_invalid=True,
+                n_processes=args.n_processes,
+            )
+            if invalid_indices:
+                print(f"Warning: {len(invalid_indices)} invalid SMILES found")
+                invalid_path = output_dir / f"{smi_file.stem}_invalid_indices.json"
+                with open(invalid_path, "w") as f:
+                    json.dump(invalid_indices, f, indent=2)
+                print(f"✓ Saved {len(invalid_indices)} invalid indices to {invalid_path}")
+        else:
+            fps = count_fps(
+                smiles,
+                fp_type=args.fp_type,
+                n_bits=args.n_bits,
+                return_invalid=False,
+                n_processes=args.n_processes,
+            )
+        elapsed = time.perf_counter() - t0
+        print(f"✓ Generated in {elapsed:.2f}s")
 
-    output_path = args.out if args.out else Path("count_fps.npy")
-    np.save(output_path, fps)
-    print(f"✓ Saved {fps.shape[0]} fingerprints to {output_path}")
+        if args.out:
+            output_path = args.out
+        else:
+            output_path = get_output_path(smi_file, args.fp_type, '.npy', output_dir)
+        
+        np.save(output_path, fps)
+        print(f"✓ Saved {fps.shape[0]} fingerprints to {output_path}")
 
     return 0
 
 
 def _run_real_fps(args: argparse.Namespace) -> int:
-    print("Loading SMILES...")
-    smiles = _load_smiles(args.input)
-    print(f"Loaded {len(smiles)} SMILES")
+    smi_files = get_smi_files(args.input)
+    
+    if not smi_files:
+        raise ValueError(f"No .smi or .smi.gz files found in {args.input}")
+    
+    output_dir = args.input if args.input.is_dir() else args.input.parent
+    
+    for smi_file in smi_files:
+        print(f"\nProcessing: {smi_file.name}")
+        print("Loading SMILES...")
+        smiles = load_smiles(smi_file)
+        print(f"Loaded {len(smiles)} SMILES")
 
-    print("Generating real-valued fingerprints...")
-    if args.return_invalid:
-        fps, invalid_indices = real_fps(
-            smiles, return_invalid=True
-        )
-        if invalid_indices:
-            print(f"Warning: {len(invalid_indices)} invalid SMILES found")
-            invalid_path = Path(args.out).parent / f"{Path(args.out).stem}_invalid_indices.json" if args.out else Path("real_fps_invalid_indices.json")
-            with open(invalid_path, "w") as f:
-                json.dump(invalid_indices, f, indent=2)
-            print(f"✓ Saved {len(invalid_indices)} invalid indices to {invalid_path}")
-    else:
-        fps = real_fps(smiles, return_invalid=False)
+        print("Generating real-valued fingerprints...")
+        t0 = time.perf_counter()
+        if args.return_invalid:
+            fps, invalid_indices = real_fps(
+                smiles, return_invalid=True
+            )
+            if invalid_indices:
+                print(f"Warning: {len(invalid_indices)} invalid SMILES found")
+                invalid_path = output_dir / f"{smi_file.stem}_invalid_indices.json"
+                with open(invalid_path, "w") as f:
+                    json.dump(invalid_indices, f, indent=2)
+                print(f"✓ Saved {len(invalid_indices)} invalid indices to {invalid_path}")
+        else:
+            fps = real_fps(smiles, return_invalid=False)
+        elapsed = time.perf_counter() - t0
+        print(f"✓ Generated in {elapsed:.2f}s")
 
-    output_path = args.out if args.out else Path("real_fps.npy")
-    np.save(output_path, fps)
-    print(f"✓ Saved {fps.shape[0]} fingerprints to {output_path}")
+        if args.out:
+            output_path = args.out
+        else:
+            output_path = get_output_path(smi_file, 'RDKitDescriptors', '.npy', output_dir)
+        
+        np.save(output_path, fps)
+        print(f"✓ Saved {fps.shape[0]} fingerprints to {output_path}")
 
     return 0
 

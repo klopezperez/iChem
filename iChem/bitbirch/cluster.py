@@ -238,6 +238,7 @@ def cluster(file_path: str,
                             save_centroids = save_centroids,
                             reclustering_iterations_initial = recluster_iterations,
                             reclustering_iterations_midsection = recluster_iterations,
+                            reclustering_iterations_final= recluster_iterations,
                             reclustering_extra_threshold = recluster_extra_threshold,
                             # Debug
                             verbose = verbose,

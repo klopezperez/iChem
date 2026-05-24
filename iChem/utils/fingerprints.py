@@ -56,7 +56,8 @@ def binary_fps(smiles: list,
                n_bits: int = 2048,
                return_invalid: bool = RETURN_INVALID,
                standarize: bool = False,
-               packed: bool = False):
+               packed: bool = False,
+               n_processes: int = None):
     """This function generates binary fingerprints for the dataset.
 
     Parallelized across CPU cores.
@@ -70,16 +71,21 @@ def binary_fps(smiles: list,
         standarize: whether to standardize molecules
         packed: whether to return packed fingerprints
             (not supported for MACCS)
+        n_processes: number of processes to use for parallelization.
+            If None, uses min(available_cpus, CPU_CORES)
 
     Returns:
         fingerprints: numpy array of fingerprints
         and list of invalid SMILES indices if return_invalid is True
     """
 
+    # Determine number of processes to use
+    if n_processes is None:
+        n_processes = min(cpu_count(), CPU_CORES)
+    
     # Divide the smiles into chunks and generate fingerprints for each chunk
     # in parallel
-    n_cpus = min(cpu_count(), CPU_CORES)
-    smiles_chunks = np.array_split(smiles, n_cpus)
+    smiles_chunks = np.array_split(smiles, n_processes)
 
     # Create list of (chunk, chunk_offset, ...) tuples for parallel processing
     chunk_tasks = []
@@ -91,7 +97,7 @@ def binary_fps(smiles: list,
         )
         offset += len(chunk)
 
-    with Pool(n_cpus) as pool:
+    with Pool(n_processes) as pool:
         results = pool.starmap(_binary_fps, chunk_tasks)
 
     # Concatenate the results from all chunks
@@ -195,7 +201,8 @@ def _binary_fps(smiles: list,
 def count_fps(smiles: list,
               fp_type: str = 'RDKIT',
               n_bits: int = 2048,
-              return_invalid: bool = RETURN_INVALID) -> np.ndarray:
+              return_invalid: bool = RETURN_INVALID,
+              n_processes: int = None) -> np.ndarray:
     """
     This function generates count-based fingerprints for the dataset.
 
@@ -207,6 +214,8 @@ def count_fps(smiles: list,
     fp_type: type of fingerprint to generate ['RDKIT', 'ECFP4', 'ECFP6']
     n_bits: number of bits for the fingerprint
     return_invalid: whether to return invalid SMILES indices
+    n_processes: number of processes to use for parallelization.
+        If None, uses min(available_cpus, CPU_CORES)
 
     Returns:
     --------
@@ -214,7 +223,11 @@ def count_fps(smiles: list,
     and list of invalid SMILES indices if return_invalid is True
     """
 
-    smiles_chunks = np.array_split(smiles, cpu_count())
+    # Determine number of processes to use
+    if n_processes is None:
+        n_processes = min(cpu_count(), CPU_CORES)
+
+    smiles_chunks = np.array_split(smiles, n_processes)
 
     # Create list of (chunk, chunk_offset, ...) tuples for parallel processing
     chunk_tasks = []
@@ -223,7 +236,7 @@ def count_fps(smiles: list,
         chunk_tasks.append((chunk, offset, fp_type, n_bits, return_invalid))
         offset += len(chunk)
 
-    with Pool(cpu_count()) as pool:
+    with Pool(n_processes) as pool:
         results = pool.starmap(_count_fps, chunk_tasks)
 
     if return_invalid:
