@@ -89,8 +89,9 @@ def rewrite_smiles_by_cluster(clusters: list[list[int]],
 
         # Clear memory after processing cluster
         del cluster_smiles
+        del sorted_indices
         del current_file_smiles
-        current_file_smiles = None
+        clusters[cluster_id] = None  # Drop indices to free memory
 
 
 def main():
