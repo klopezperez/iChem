@@ -7,6 +7,8 @@ import json
 import time
 from pathlib import Path
 from typing import Sequence
+import pickle as pkl
+import sys
 
 from .bitbirch.cluster import cluster
 from .bitbirch.multiround_reclustering import run_multiround_reclustering
@@ -15,6 +17,8 @@ from .bitbirch._hpc_midsection_submit import prepare_midsection_round_jobs
 from .bitbirch._hpc_final_submit import prepare_final_round_job
 from .bitbirch import _config
 from .utils.fingerprints import binary_fps, count_fps, real_fps
+from .cluster_sampling import sample_clusters
+from .cluster_analysis.rewrite_smiles import rewrite_smiles_by_cluster
 from ._cli import load_smiles, get_smi_files, get_output_path
 import numpy as np
 
@@ -222,6 +226,79 @@ def _build_parser() -> argparse.ArgumentParser:
     real_fps_parser.add_argument(
         "--out", type=Path, default=None,
         help="Output .npy file for fingerprints (default: real_fps.npy)"
+    )
+
+    cluster_sampling_parser = subparsers.add_parser(
+        "cluster-sampling", help="Sample molecules from clusters"
+    )
+    cluster_sampling_parser.add_argument(
+        "--clusters", type=Path, required=True,
+        help="Path to .pkl file containing cluster assignments"
+    )
+    cluster_sampling_parser.add_argument(
+        "--fingerprints", type=Path, default=None,
+        help="Path to .npy file or directory containing fingerprints"
+    )
+    cluster_sampling_parser.add_argument(
+        "--smiles", type=Path, default=None,
+        help="Path to .smi or .smi.gz file or directory containing SMILES files"
+    )
+    cluster_sampling_parser.add_argument(
+        "--centroids", type=Path, default=None,
+        help="Path to .pkl file containing centroids (required for centroid-like sampling)"
+    )
+    cluster_sampling_parser.add_argument(
+        "--method", default="centroid-like",
+        choices=["singletons", "medoids", "centroid-like"],
+        help="Sampling method (default: centroid-like)"
+    )
+    cluster_sampling_parser.add_argument(
+        "--min-size", type=int, default=0,
+        help="Minimum cluster size to sample from (for medoids method)"
+    )
+    cluster_sampling_parser.add_argument(
+        "--fp-type", default="ECFP4",
+        help="Fingerprint type for computing from SMILES (when fps not provided)"
+    )
+    cluster_sampling_parser.add_argument(
+        "--n-bits", type=int, default=2048,
+        help="Number of bits in fingerprint vectors"
+    )
+    cluster_sampling_parser.add_argument(
+        "--sample", action=argparse.BooleanOptionalAction, default=True,
+        help="Subsample large clusters before computing medoid/centroid"
+    )
+    cluster_sampling_parser.add_argument(
+        "--sample-min-size", type=int, default=1000,
+        help="Subsample threshold for large clusters"
+    )
+    cluster_sampling_parser.add_argument(
+        "--n-processes", type=int, default=None,
+        help="Number of processes for parallel sampling (default: min(8, cpu_count())). Only applies when fps are provided."
+    )
+
+    rewrite_smiles_parser = subparsers.add_parser(
+        "rewrite-smiles-by-cluster", help="Reorganize SMILES files by cluster"
+    )
+    rewrite_smiles_parser.add_argument(
+        "--clusters", type=Path, required=True,
+        help="Path to .pkl file containing cluster assignments (list of lists)"
+    )
+    rewrite_smiles_parser.add_argument(
+        "--smiles-dir", type=Path, required=True,
+        help="Directory containing input SMILES files (*.smi or *.smi.gz)"
+    )
+    rewrite_smiles_parser.add_argument(
+        "--output-dir", type=Path, required=True,
+        help="Directory to write cluster-organized SMILES files"
+    )
+    rewrite_smiles_parser.add_argument(
+        "--smiles-per-file", type=int, default=1_000_000,
+        help="Number of SMILES per input file (default: 1M)"
+    )
+    rewrite_smiles_parser.add_argument(
+        "--compressed", action=argparse.BooleanOptionalAction, default=False,
+        help="Write gzipped files (.smi.gz) instead of plain text"
     )
 
     return parser
@@ -500,12 +577,12 @@ def _run_count_fps(args: argparse.Namespace) -> int:
 
 def _run_real_fps(args: argparse.Namespace) -> int:
     smi_files = get_smi_files(args.input)
-    
+
     if not smi_files:
         raise ValueError(f"No .smi or .smi.gz files found in {args.input}")
-    
+
     output_dir = args.input if args.input.is_dir() else args.input.parent
-    
+
     for smi_file in smi_files:
         print(f"\nProcessing: {smi_file.name}")
         print("Loading SMILES...")
@@ -533,10 +610,84 @@ def _run_real_fps(args: argparse.Namespace) -> int:
             output_path = args.out
         else:
             output_path = get_output_path(smi_file, 'RDKitDescriptors', '.npy', output_dir)
-        
+
         np.save(output_path, fps)
         print(f"✓ Saved {fps.shape[0]} fingerprints to {output_path}")
 
+    return 0
+
+
+def _run_cluster_sampling(args: argparse.Namespace) -> int:
+    print(f"[cluster-sampling] Started at {time.strftime('%Y-%m-%d %H:%M:%S')}")
+    t0 = time.perf_counter()
+
+    print(f"Sampling method: {args.method}")
+    print(f"Loading clusters from {args.clusters}...")
+
+    sampled_data = sample_clusters(
+        clusters=args.clusters,
+        sampling_method=args.method,
+        fps=args.fingerprints,
+        smiles=args.smiles,
+        centroids=args.centroids,
+        min_size=args.min_size,
+        fp_type=args.fp_type,
+        n_bits=args.n_bits,
+        sample=args.sample,
+        sample_min_size=args.sample_min_size,
+        n_processes=args.n_processes,
+    )
+
+    elapsed = time.perf_counter() - t0
+    print(f"✓ Sampling completed in {elapsed:.2f}s")
+    print(f"✓ Sampled {len(sampled_data)} molecules")
+
+    if args.smiles and isinstance(sampled_data[0], str):
+        smi_path = Path(args.smiles)
+        stem = smi_path.stem
+        if stem.endswith('.smi'):
+            stem = stem[:-4]
+
+        output_dir = smi_path.parent if smi_path.is_file() else smi_path
+        output_path = output_dir / f"{stem}_{args.method}.smi"
+
+        with open(output_path, 'w') as f:
+            for smi in sampled_data:
+                f.write(f"{smi}\n")
+
+        print(f"✓ Saved sampled SMILES to {output_path}")
+
+    print(f"[cluster-sampling] Finished at {time.strftime('%Y-%m-%d %H:%M:%S')}")
+    return 0
+
+
+def _run_rewrite_smiles_by_cluster(args: argparse.Namespace) -> int:
+    print(f"[rewrite-smiles-by-cluster] Started at {time.strftime('%Y-%m-%d %H:%M:%S')}")
+    sys.stdout.flush()
+    t0 = time.perf_counter()
+
+    print(f"Loading clusters from {args.clusters}...")
+    sys.stdout.flush()
+    with open(args.clusters, 'rb') as f:
+        clusters = pkl.load(f)
+    print(f"Loaded {len(clusters)} clusters")
+    sys.stdout.flush()
+
+    print(f"Reorganizing SMILES files by cluster...")
+    sys.stdout.flush()
+    rewrite_smiles_by_cluster(
+        clusters=clusters,
+        input_smiles_dir=str(args.smiles_dir),
+        output_dir=str(args.output_dir),
+        smiles_per_file=args.smiles_per_file,
+        compressed=args.compressed,
+    )
+
+    elapsed = time.perf_counter() - t0
+    print(f"✓ Reorganization completed in {elapsed:.2f}s")
+    sys.stdout.flush()
+    print(f"[rewrite-smiles-by-cluster] Finished at {time.strftime('%Y-%m-%d %H:%M:%S')}")
+    sys.stdout.flush()
     return 0
 
 
@@ -562,6 +713,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_count_fps(args)
     if args.command == "real-fps":
         return _run_real_fps(args)
+    if args.command == "cluster-sampling":
+        return _run_cluster_sampling(args)
+    if args.command == "rewrite-smiles-by-cluster":
+        return _run_rewrite_smiles_by_cluster(args)
     parser.error("Unknown command")
     return 2
 
