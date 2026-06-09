@@ -18,7 +18,8 @@ from .bitbirch._hpc_final_submit import prepare_final_round_job
 from .bitbirch import _config
 from .utils.fingerprints import binary_fps, count_fps, real_fps
 from .cluster_sampling import sample_clusters
-from .cluster_analysis.rewrite_smiles import rewrite_smiles_by_cluster
+from .cluster_sampling.sample_from_cluster_files import sample_from_cluster_files
+from .cluster_analysis.rewrite_smiles import rewrite_smiles_by_cluster, find_first_missing_cluster
 from ._cli import load_smiles, get_smi_files, get_output_path
 import numpy as np
 
@@ -299,6 +300,55 @@ def _build_parser() -> argparse.ArgumentParser:
     rewrite_smiles_parser.add_argument(
         "--compressed", action=argparse.BooleanOptionalAction, default=False,
         help="Write gzipped files (.smi.gz) instead of plain text"
+    )
+    rewrite_smiles_parser.add_argument(
+        "--num-workers", type=int, default=8,
+        help="Number of parallel processes (default: 8)"
+    )
+    rewrite_smiles_parser.add_argument(
+        "--start-at", type=int, default=0,
+        help="Cluster index to start processing from (default: 0)"
+    )
+
+    sample_from_cluster_files_parser = subparsers.add_parser(
+        "sample-from-cluster-files", help="Sample molecules from cluster files directory"
+    )
+    sample_from_cluster_files_parser.add_argument(
+        "--cluster-dir", type=Path, required=True,
+        help="Directory containing cluster files (.smi or .smi.gz)"
+    )
+    sample_from_cluster_files_parser.add_argument(
+        "--method", default="medoids",
+        choices=["medoids", "centroid-like"],
+        help="Sampling method (default: medoids)"
+    )
+    sample_from_cluster_files_parser.add_argument(
+        "--centroids", type=Path, default=None,
+        help="Path to .pkl file containing centroids (required for centroid-like method)"
+    )
+    sample_from_cluster_files_parser.add_argument(
+        "--fp-type", default="ECFP4",
+        help="Fingerprint type (default: ECFP4)"
+    )
+    sample_from_cluster_files_parser.add_argument(
+        "--n-bits", type=int, default=2048,
+        help="Number of fingerprint bits (default: 2048)"
+    )
+    sample_from_cluster_files_parser.add_argument(
+        "--sample", action=argparse.BooleanOptionalAction, default=True,
+        help="Subsample large clusters before computing medoid/centroid (default: True)"
+    )
+    sample_from_cluster_files_parser.add_argument(
+        "--sample-min-size", type=int, default=1000,
+        help="Subsample threshold for large clusters (default: 1000)"
+    )
+    sample_from_cluster_files_parser.add_argument(
+        "--n-processes", type=int, default=None,
+        help="Number of parallel processes (default: min(8, cpu_count()))"
+    )
+    sample_from_cluster_files_parser.add_argument(
+        "--output", type=Path, default=None,
+        help="Output file path for sampled SMILES (optional)"
     )
 
     return parser
@@ -673,6 +723,18 @@ def _run_rewrite_smiles_by_cluster(args: argparse.Namespace) -> int:
     print(f"Loaded {len(clusters)} clusters")
     sys.stdout.flush()
 
+    # Auto-detect starting point if output dir exists
+    start_at = args.start_at
+    if args.output_dir.exists() and start_at == 0:
+        first_missing = find_first_missing_cluster(
+            str(args.output_dir), len(clusters), args.compressed
+        )
+        if first_missing < len(clusters):
+            print(f"Output directory exists. Found {first_missing} completed clusters.")
+            print(f"Resuming from cluster {first_missing}")
+            sys.stdout.flush()
+            start_at = first_missing
+
     print(f"Reorganizing SMILES files by cluster...")
     sys.stdout.flush()
     rewrite_smiles_by_cluster(
@@ -681,12 +743,80 @@ def _run_rewrite_smiles_by_cluster(args: argparse.Namespace) -> int:
         output_dir=str(args.output_dir),
         smiles_per_file=args.smiles_per_file,
         compressed=args.compressed,
+        num_workers=args.num_workers,
+        start_at=start_at,
     )
 
     elapsed = time.perf_counter() - t0
     print(f"✓ Reorganization completed in {elapsed:.2f}s")
     sys.stdout.flush()
     print(f"[rewrite-smiles-by-cluster] Finished at {time.strftime('%Y-%m-%d %H:%M:%S')}")
+    sys.stdout.flush()
+    return 0
+
+
+def _run_sample_from_cluster_files(args: argparse.Namespace) -> int:
+    print(f"[sample-from-cluster-files] Started at {time.strftime('%Y-%m-%d %H:%M:%S')}")
+    sys.stdout.flush()
+    t0 = time.perf_counter()
+
+    # Validate cluster directory
+    if not args.cluster_dir.is_dir():
+        print(f"✗ Error: Cluster directory not found: {args.cluster_dir}")
+        return 1
+
+    print(f"Cluster directory: {args.cluster_dir}")
+    print(f"Sampling method: {args.method}")
+    sys.stdout.flush()
+
+    # Load centroids if needed
+    centroids = None
+    if args.method == "centroid-like":
+        if args.centroids is None:
+            print("✗ Error: --centroids is required for centroid-like sampling")
+            return 1
+        if not args.centroids.exists():
+            print(f"✗ Error: Centroids file not found: {args.centroids}")
+            return 1
+        print(f"Loading centroids from {args.centroids}...")
+        with open(args.centroids, 'rb') as f:
+            centroids = pkl.load(f)
+        print(f"Loaded {len(centroids)} centroids")
+        sys.stdout.flush()
+
+    # Perform sampling
+    print("Sampling molecules from cluster files...")
+    sys.stdout.flush()
+    sampled_smiles = sample_from_cluster_files(
+        cluster_dir=args.cluster_dir,
+        sampling_method=args.method,
+        centroids=centroids,
+        fp_type=args.fp_type,
+        n_bits=args.n_bits,
+        sample=args.sample,
+        sample_min_size=args.sample_min_size,
+        n_processes=args.n_processes,
+    )
+
+    elapsed = time.perf_counter() - t0
+    print(f"✓ Sampling completed in {elapsed:.2f}s")
+    print(f"✓ Sampled {len(sampled_smiles)} molecules (one per cluster)")
+    sys.stdout.flush()
+
+    # Save output if requested
+    if args.output:
+        print(f"Saving sampled SMILES to {args.output}...")
+        with open(args.output, 'w') as f:
+            for smi in sampled_smiles:
+                f.write(f"{smi}\n")
+        print(f"✓ Saved {len(sampled_smiles)} SMILES to {args.output}")
+    else:
+        # Print to stdout if no output file specified
+        for smi in sampled_smiles:
+            print(smi)
+
+    sys.stdout.flush()
+    print(f"[sample-from-cluster-files] Finished at {time.strftime('%Y-%m-%d %H:%M:%S')}")
     sys.stdout.flush()
     return 0
 
@@ -717,6 +847,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_cluster_sampling(args)
     if args.command == "rewrite-smiles-by-cluster":
         return _run_rewrite_smiles_by_cluster(args)
+    if args.command == "sample-from-cluster-files":
+        return _run_sample_from_cluster_files(args)
     parser.error("Unknown command")
     return 2
 
