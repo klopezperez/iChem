@@ -61,6 +61,8 @@ def _generate_final_round_script(
         cmd += "--save-tree "
     if params['save_centroids']:
         cmd += "--save-centroids "
+    if params['save_npy']:
+        cmd += "--save-npy "
 
     with open(script_path, "w") as f:
         f.write("#!/bin/bash\n\n")
@@ -95,6 +97,7 @@ def prepare_final_round_job(
     merge_criterion: str = _config.MERGE_CRITERION,
     reclustering_iterations: int = _config.RECLUSTERING_ITERATIONS_FINAL,
     reclustering_extra_threshold: float = _config.RECLUSTERING_EXTRA_THRESHOLD,
+    save_npy: bool = False,
     save_tree: bool = False,
     save_centroids: bool = True,
     # SLURM parameters
@@ -122,6 +125,8 @@ def prepare_final_round_job(
         Number of reclustering iterations
     reclustering_extra_threshold : float
         Extra threshold for reclustering
+    save_npy : bool
+        Whether to save clusters as separate .npy files (one per cluster)
     save_tree : bool
         Whether to save the final BitBirch tree
     save_centroids : bool
@@ -166,6 +171,7 @@ def prepare_final_round_job(
         "merge_criterion": merge_criterion,
         "reclustering_iterations": reclustering_iterations,
         "extra_threshold": reclustering_extra_threshold,
+        "save_npy": save_npy,
         "save_tree": save_tree,
         "save_centroids": save_centroids,
     }
@@ -214,6 +220,7 @@ if __name__ == "__main__":
     parser.add_argument("--merge-criterion", type=str, default=_config.MERGE_CRITERION, help="Merge criterion")
     parser.add_argument("--reclustering-iterations", type=int, default=_config.RECLUSTERING_ITERATIONS_FINAL, help="Reclustering iterations")
     parser.add_argument("--reclustering-extra-threshold", type=float, default=_config.RECLUSTERING_EXTRA_THRESHOLD, help="Extra threshold")
+    parser.add_argument("--save-npy", action="store_true", default=False, help="Save clusters as separate .npy files")
     parser.add_argument("--save-tree", action="store_true", default=False, help="Save the BitBirch tree")
     parser.add_argument("--save-centroids", action="store_true", default=True, help="Save centroids and cluster assignments")
     parser.add_argument("--slurm-mem", type=str, default=_config.SLURM_MEM_FINAL, help="SLURM memory")
@@ -231,6 +238,7 @@ if __name__ == "__main__":
         merge_criterion=args.merge_criterion,
         reclustering_iterations=args.reclustering_iterations,
         reclustering_extra_threshold=args.reclustering_extra_threshold,
+        save_npy=args.save_npy,
         save_tree=args.save_tree,
         save_centroids=args.save_centroids,
         slurm_mem=args.slurm_mem,

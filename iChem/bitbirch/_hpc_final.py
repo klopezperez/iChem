@@ -5,8 +5,9 @@ import multiprocessing as mp
 import os
 from pathlib import Path
 import pickle
+import numpy as np
 
-from bblean import BitBirch
+from bblean import BitBirch # type: ignore
 
 from . import _config
 
@@ -93,12 +94,23 @@ def main(args: argparse.Namespace) -> None:
 
         if args.save_centroids:
             output = tree.get_centroids_mol_ids()
-            with open(output_dir / "clusters.pkl", mode="wb") as f:
-                pickle.dump(output["mol_ids"], f)
+            if args.save_npy:
+                os.makedirs(output_dir / "clusters", exist_ok=True)
+                for i, cluster in enumerate(output["mol_ids"]):
+                    np.save(output_dir / "clusters" / f"cluster_{i}.npy", cluster)
+                print(f"[Final Round] Saved clusters as separate .npy files")
+            else:
+                with open(output_dir / "clusters.pkl", mode="wb") as f:
+                    pickle.dump(output["mol_ids"], f)
             with open(output_dir / "cluster-centroids-packed.pkl", mode="wb") as f:
                 pickle.dump(output["centroids"], f)
             print(f"[Final Round] Saved centroids and cluster assignments")
         else:
+            if args.save_npy:
+                os.makedirs(output_dir / "clusters", exist_ok=True)
+                for i, cluster in enumerate(tree.get_cluster_mol_ids()):
+                    np.save(output_dir / "clusters" / f"cluster_{i}.npy", cluster)
+                print(f"[Final Round] Saved clusters as separate .npy files")
             with open(output_dir / "clusters.pkl", mode="wb") as f:
                 pickle.dump(tree.get_cluster_mol_ids(), f)
             print(f"[Final Round] Saved cluster assignments")
@@ -154,6 +166,13 @@ if __name__ == "__main__":
         action="store_true",
         default=False,
         help="Save centroids and cluster assignments",
+    )
+    parser.add_argument(
+        "--save-npy",
+        dest="save_npy",
+        action="store_true",
+        default=False,
+        help="Save clusters as separate .npy files (one per cluster)",
     )
 
     args = parser.parse_args()

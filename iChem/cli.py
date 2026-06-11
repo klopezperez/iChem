@@ -143,6 +143,7 @@ def _build_parser() -> argparse.ArgumentParser:
     final_round_parser.add_argument("--merge-criterion", default=_config.MERGE_CRITERION, help="Merge criterion")
     final_round_parser.add_argument("--reclustering-iterations", type=int, default=_config.RECLUSTERING_ITERATIONS_FINAL, help="Reclustering iterations")
     final_round_parser.add_argument("--reclustering-extra-threshold", type=float, default=_config.RECLUSTERING_EXTRA_THRESHOLD, help="Extra threshold for reclustering")
+    final_round_parser.add_argument("--save-npy", action=argparse.BooleanOptionalAction, default=False, help="Save clusters as separate .npy files (one per cluster)")
     final_round_parser.add_argument("--save-tree", action=argparse.BooleanOptionalAction, default=False, help="Save the BitBirch tree")
     final_round_parser.add_argument("--save-centroids", action=argparse.BooleanOptionalAction, default=False, help="Save centroids and cluster assignments")
     final_round_parser.add_argument("--slurm-mem", default=_config.SLURM_MEM_FINAL, help="SLURM memory allocation")
@@ -502,6 +503,7 @@ def _run_final_round(args: argparse.Namespace) -> int:
         merge_criterion=args.merge_criterion,
         reclustering_iterations=args.reclustering_iterations,
         reclustering_extra_threshold=args.reclustering_extra_threshold,
+        save_npy=args.save_npy,
         save_tree=args.save_tree,
         save_centroids=args.save_centroids,
         slurm_mem=args.slurm_mem,
