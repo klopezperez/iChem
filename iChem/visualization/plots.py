@@ -5,8 +5,9 @@ import seaborn as sns # type: ignore
 from seaborn import heatmap # type: ignore
 #import plotly.graph_objects as go
 from collections import Counter, defaultdict
+from ..bitbirch.cluster import get_iSIM_clusters
 
-def clusters_pop_plot(bitbirch_obj,
+def clusters_pop_plot(clusters: list[int],
                       save_path: str = None,
                       ):
 
@@ -18,7 +19,7 @@ def clusters_pop_plot(bitbirch_obj,
     """
 
     # Calculate the counts of the populations
-    populations = bitbirch_obj.get_cluster_populations()
+    populations = [len(cluster) for cluster in clusters]
     n_1000 = sum(1 for pop in populations if pop > 1000)
     n_100 = sum(1 for pop in populations if pop > 100)
     n_10 = sum(1 for pop in populations if pop > 10)
@@ -41,7 +42,8 @@ def clusters_pop_plot(bitbirch_obj,
         plt.show()
 
 
-def clusters_pop_isim_plot(bitbirch_obj,
+def clusters_pop_isim_plot(clusters: list[int],
+                           fps: np.ndarray,
                            save_path: str = None,
                            figsize: tuple = (12, 6),
                            top=20,
@@ -49,15 +51,16 @@ def clusters_pop_isim_plot(bitbirch_obj,
     """Plot cluster population as bars with iSIM values on secondary axis.
 
     Args:
-        bitbirch_obj: BitBirch clustering object with fitted clusters.
+        clusters (list[int]): List of cluster assignments.
+        isim_values (list[float]): List of iSIM values for each cluster.
         save_path (str, optional): Path to save the plot. Defaults to None.
         figsize (tuple, optional): Figure size (width, height). Defaults to (12, 6).
         top (int, optional): Number of top clusters to display. Defaults to 20.
         initial (int, optional): Starting index for clusters to display. Defaults to 0."""
 
     # Get cluster populations and iSIM values
-    all_populations = bitbirch_obj.get_cluster_populations()
-    isim_values = bitbirch_obj.get_iSIM_clusters()
+    all_populations = [len(cluster) for cluster in clusters[initial:top]]
+    isim_values = get_iSIM_clusters(clusters[initial:top], fps)
     
     # Calculate statistics before limiting
     total_clusters = len(all_populations)

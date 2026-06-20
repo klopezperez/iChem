@@ -6,6 +6,7 @@ import numpy as np # type: ignore
 
 from bblean.bitbirch import BitBirch # type: ignore
 from bblean.fingerprints import _get_fps_file_num # type: ignore
+from bblean.similarity import jt_isim # type: ignore
 
 from .optimal_threshold import optimal_threshold
 from ..utils import binary_fps, load_smiles, load_smiles_gzipped
@@ -496,3 +497,14 @@ def _prepare_fps_directory(dir_path: Path,
         npy_path = _prepare_fps_single(smi_file, fp_type, n_bits, verbose)
         npy_paths.append(npy_path)
     return npy_paths
+
+
+def get_iSIM_clusters(clusters: list[int],
+            fps: np.ndarray):
+    """Calculate iSIM values for each cluster given the cluster assignments and the fingerprints."""
+    iSIM_values = []
+    for cluster in clusters:
+        cluster_fps = fps[cluster]
+        iSIM_values.append(jt_isim(cluster_fps))
+    return iSIM_values
+        
