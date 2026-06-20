@@ -1,6 +1,6 @@
 import numpy as np # type: ignore
-from ..bitbirch.similarity import jt_isim_packed
-from collections import Counter
+from bblean.similarity import jt_isim_packed  # type: ignore
+from collections import Counter, defaultdict
 
 def interiSIM(fps1: np.ndarray,
               fps2: np.ndarray) -> float:
@@ -161,3 +161,53 @@ def composition_per_cluster(clustered_flags: list,
         counts_per_cluster.append(counter)
 
     return counts_per_cluster
+
+def weighted_combo_counts(
+    cluster_flags,
+    cluster_sizes,
+    library_names=None,
+):
+    """
+    Same as combo_counts but weights each cluster
+    by represented population size.
+    """
+
+    mapping = {}
+    counts = defaultdict(float)
+
+    for idx, (flags, sizes) in enumerate(
+        zip(cluster_flags, cluster_sizes)
+    ):
+
+        unique_libs = sorted(np.unique(flags))
+
+        key = "+".join(unique_libs)
+
+        if key not in mapping:
+            mapping[key] = []
+
+        mapping[key].append(idx)
+
+        counts[key] += np.sum(sizes)
+
+    if library_names is not None:
+        for lib in library_names:
+            counts.setdefault(lib, 0)
+
+    return dict(counts), mapping
+
+def weighted_composition_per_cluster(
+    cluster_flags,
+    cluster_sizes
+):
+    compositions = []
+
+    for flags, sizes in zip(cluster_flags, cluster_sizes):
+        comp = Counter()
+
+        for flag, size in zip(flags, sizes):
+            comp[flag] += size
+
+        compositions.append(comp)
+
+    return compositions

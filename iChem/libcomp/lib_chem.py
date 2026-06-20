@@ -3,7 +3,7 @@ from typing import Union
 
 from bblean.fingerprints import pack_fingerprints, unpack_fingerprints  # type: ignore
 
-from ..utils.utils import binary_fps
+from ..utils import binary_fps
 from ..utils.utils import load_smiles as _load_smiles
 from ..utils.utils import load_smiles_gzipped as _load_smiles_gzipped
 
@@ -25,9 +25,11 @@ class LibChem:
         self.fps_packed = None
         self.smiles = None
         self.n_molecules = 0
-        self.flags = None
+        self.cluster_sizes = np.array([])
 
         self.load_smiles(smiles)
+        self._set_flags()
+
 
     def load_smiles(
             self,
@@ -51,7 +53,7 @@ class LibChem:
 
         self.smiles = loaded_smiles
         self.n_molecules = len(self.smiles)
-        self.set_flags()
+        self._set_flags()
 
     def load_fingerprints(
             self,
@@ -74,9 +76,36 @@ class LibChem:
 
         self.fps_packed = fps if packed else pack_fingerprints(fps)
 
-    def set_flags(self) -> None:
+    def load_cluster_sizes(
+            self,
+            cluster_sizes: Union[str, list, np.ndarray],
+    ) -> None:
+        """Load the cluster sizes for the representative molecules.
+        They must be provided in the corresponding order as the SMILES and fingerprints."""
+
+        if isinstance(cluster_sizes, list):
+            self.cluster_sizes = np.array(cluster_sizes)
+        elif isinstance(cluster_sizes, np.ndarray):
+            self.cluster_sizes = cluster_sizes
+        elif isinstance(cluster_sizes, str):
+            if cluster_sizes.endswith(".npy"):
+                self.cluster_sizes = np.load(cluster_sizes, mmap_mode="r")
+            elif cluster_sizes.endswith(".txt") or cluster_sizes.endswith(".csv"):
+                self.cluster_sizes = np.loadtxt(cluster_sizes, dtype=int)
+            elif cluster_sizes.endswith(".pkl"):
+                import pickle as pkl
+                with open(cluster_sizes, "rb") as f:
+                    self.cluster_sizes = pkl.load(f)
+            else:
+                raise ValueError(
+                    "Unsupported file format for cluster sizes. "
+                    "Please provide a .npy, .txt, .csv, or .pkl file."
+                    "Clusters sizes must be provided in the same order as the SMILES and fingerprints."
+                )
+
+    def _set_flags(self) -> None:
         """Set one origin flag per representative molecule."""
-        self.flags = [self.name] * self.n_molecules
+        self._flags = [self.name] * self.n_molecules
 
     def generate_fingerprints(
             self,
@@ -102,7 +131,8 @@ class LibChem:
 
         self.fps_packed = fps
 
-    def get_fingerprints(
+    @property
+    def fingerprints(
             self,
             packed: bool = True,
     ) -> np.ndarray:
@@ -114,11 +144,12 @@ class LibChem:
             return self.fps_packed
         return unpack_fingerprints(self.fps_packed)
 
-    def get_flags(self) -> list:
+    @property
+    def flags(self) -> list:
         """Retrieve origin flags for the representative molecules."""
-        if self.flags is None:
+        if self._flags is None:
             raise ValueError("Flags not computed.")
-        return self.flags
+        return self._flags
 
     def empty_fingerprints(self) -> None:
         """Delete fingerprints from memory."""

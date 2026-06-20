@@ -4,7 +4,7 @@ import json
 import tempfile
 import os
 from iChem.utils.utils import binary_fps, count_fps, real_fps, normalize_fps, minmax_norm
-from iChem.bitbirch.similarity import optimal_threshold
+from iChem.bitbirch.optimal_threshold import optimal_threshold
 from iChem.bitbirch.hierarchical import hierarchical_bitbirch
 from iChem.bbreal.hierarchical import hierarchical_bbreal
 from iChem.bbreal import optimal_threshold_real

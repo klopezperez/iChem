@@ -1,637 +1,626 @@
-import numpy as np # type: ignore
-from collections import Counter
+import numpy as np  # type: ignore
 from typing import TYPE_CHECKING
+from collections import defaultdict
+from ..bitbirch._config import FINGERPRINT_TYPE, THRESHOLD, BRANCHING_FACTOR, MERGE_CRITERION, N_BITS
+from ..bitbirch import cluster
 
-if TYPE_CHECKING:
-    from .lib_chem import LibChem
+from bblean.similarity import jt_sim_matrix_packed  # type: ignore
 
 from ._libchem_aux import (
-    interiSIM,
-    intraiSIM,
     MaxSum,
     MinSum,
-    combo_counts,
+    interiSIM,
+    intraiSIM,
     composition_per_cluster,
+    weighted_composition_per_cluster,
 )
-from ..bitbirch import jt_sim_matrix_between_packed
 
+from .lib_chem import LibChem
+
+REPRESENTATIVES_ONLY = True
 
 class LibComparison:
-    """Class for comparing multiple chemical libraries.
-    
-    This class provides functionality for comparing chemical libraries using various
-    similarity metrics, clustering combined libraries, and visualizing comparison results.
-    It works with LibChem instances and supports pairwise comparisons, medoid-based
-    comparisons, and cluster composition analysis.
-    
-    Attributes:
-        libraries (dict): Dictionary of LibChem instances keyed by library name.
-        library_names (list): List of library names in order of addition.
-        combined_library (LibChem): Combined LibChem instance created from clustering.
-    """
-    def __init__(self, 
-    ):
-        self.libraries: dict = {}
-        self.library_names: list = []
-        self.combined_library: 'LibChem | None' = None
+    """Compare named representative LibChem objects."""
 
-    def add_library(self,
-            library,
-            lib_name: str,
+    def __init__(self, *libraries: "LibChem") -> None:
+        self.libraries: dict[str, "LibChem"] = {}
+        for lib in libraries:
+            self.add_library(lib)
+        self.cluster_results: dict | None = None
+
+    def add_library(
+            self,
+            library: "LibChem",
     ) -> None:
-        """Add a chemical library to the comparison.
-        
-        Registers a LibChem instance with a unique name for subsequent comparisons.
-        
-        Args:
-            library (LibChem): The LibChem instance to add to the comparison.
-            lib_name (str): Unique identifier for the library.
-        """
-        self.libraries[lib_name] = library
-        self.library_names.append(lib_name)
+        """Register a representative library for comparison."""
+        if library.name in self.libraries:
+            raise ValueError(f"Library '{library.name}' already exists.")
 
-    def compare_libraries(self,
-                        methodology: str = 'intraiSIM',
-                        lib1_name: str = None,
-                        lib2_name: str = None) -> float:
-        """Compare two libraries using full molecular fingerprints.
-        
-        Computes similarity between complete libraries using various metrics.
-        If only two libraries exist and names are not specified, compares those two.
-        
-        Args:
-            methodology (str, optional): Comparison methodology. Defaults to 'intraiSIM'.
-                - 'intraiSIM': Intrinsic intra-library similarity comparison
-                - 'interiSIM': Intrinsic inter-library similarity comparison
-                - '_MaxSum': Maximum sum of pairwise similarities (hidden, computationally expensive)
-                - '_MinSum': Minimum sum of pairwise similarities (hidden, computationally expensive)
-            lib1_name (str, optional): Name of the first library. If None and only two libraries
-                exist, automatically uses both. Defaults to None.
-            lib2_name (str, optional): Name of the second library. If None and only two libraries
-                exist, automatically uses both. Defaults to None.
-        
-        Returns:
-            float: Similarity score between the two libraries.
-            
-        Raises:
-            ValueError: If specified libraries don't exist or if library names are required but not provided.
-        """
-        if lib1_name is None and lib2_name is None and len(self.libraries) == 2:
-            lib1_name, lib2_name = list(self.libraries.keys())
-        if lib1_name not in self.library_names or lib2_name not in self.library_names:
-            raise ValueError("Both libraries must be specified and exist in the comparison libraries.")
-        
+        self.libraries[library.name] = library
 
-        lib1 = self.libraries[lib1_name]
-        lib2 = self.libraries[lib2_name]
-
-        fps1 = lib1.get_fingerprints(packed=True)
-        fps2 = lib2.get_fingerprints(packed=True)
-
-        if methodology == 'intraiSIM':
-            isim_value = intraiSIM(
-                np.array(fps1),
-                np.array(fps2),
+    def _resolve_pair_names(
+            self,
+            lib1_name: str | None,
+            lib2_name: str | None,
+    ) -> tuple[str, str]:
+        if lib1_name is None or lib2_name is None:
+            raise ValueError(
+                "Please specify both library names for comparison. Available libraries: "
+                f"{', '.join(self.libraries.keys())}"
             )
-            return isim_value
-        if methodology == 'interiSIM':
-            return interiSIM(
-                np.array(fps1),
-                np.array(fps2),
-            )
-        if methodology == '_MaxSum': # Note: this is hidden from user to prevent large number of pairwise calculations
-            sim_matrix = jt_sim_matrix_between_packed(
-                np.array(fps1),
-                np.array(fps2),
-            )
+        if lib1_name not in self.libraries:
+            raise ValueError(f"Library '{lib1_name}' not found.")
+        if lib2_name not in self.libraries:
+            raise ValueError(f"Library '{lib2_name}' not found.")
+
+        return lib1_name, lib2_name
+
+    def _get_pair_fingerprints(
+            self,
+            lib1_name: str | None,
+            lib2_name: str | None,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        lib1_name, lib2_name = self._resolve_pair_names(lib1_name, lib2_name)
+        if self.libraries[lib1_name].fingerprints is None:
+            self.libraries[lib1_name].generate_fingerprints(fp_type=FINGERPRINT_TYPE, n_bits=N_BITS)
+            print(f"Generating fingerprints for library '{lib1_name}'...")
+            print(f"Using default parameters: ECFP4, 2048 bits.")
+            print("Pre-generate fingerprints if other fp_type or n_bits are desired.")
+        if self.libraries[lib2_name].fingerprints is None:
+            self.libraries[lib2_name].generate_fingerprints(fp_type=FINGERPRINT_TYPE, n_bits=N_BITS)
+            print(f"Generating fingerprints for library '{lib2_name}'...")
+            print(f"Using default parameters: ECFP4, 2048 bits.")
+            print("Pre-generate fingerprints if other fp_type or n_bits are desired.")
+        fps1 = self.libraries[lib1_name].fingerprints
+        fps2 = self.libraries[lib2_name].fingerprints
+        return np.asarray(fps1), np.asarray(fps2)
+
+    @staticmethod
+    def _compare_fingerprints(
+            fps1: np.ndarray,
+            fps2: np.ndarray,
+            methodology: str,
+    ) -> float:
+        if methodology == "intraiSIM":
+            return intraiSIM(fps1, fps2)
+
+        if methodology == "interiSIM":
+            return interiSIM(fps1, fps2)
+
+        if methodology in {"MaxSum", "_MaxSum"}:
+            sim_matrix = jt_sim_matrix_packed(fps1, fps2)
             return MaxSum(sim_matrix)
-        if methodology == '_MinSum': # Note: this is hidden from user to prevent large number of pairwise calculations
-            sim_matrix = jt_sim_matrix_between_packed(
-                np.array(fps1),
-                np.array(fps2),
-            )
+
+        if methodology in {"MinSum", "_MinSum"}:
+            sim_matrix = jt_sim_matrix_packed(fps1, fps2)
             return MinSum(sim_matrix)
 
-    def compare_medoids(self, 
-                        methodology: str = 'MaxSum',
-                        lib1_name: str = None,
-                        lib2_name: str = None,
-                        ) -> float:
-        """Compare cluster medoids between two libraries.
-        
-        Retrieves medoid molecules from each cluster and compares them using the specified
-        methodology. This is more efficient than full library comparison.
-        
-        Args:
-            methodology (str, optional): Comparison methodology. Defaults to 'MaxSum'.
-                - 'MaxSum': Maximum sum of pairwise similarities
-                - 'MinSum': Minimum sum of pairwise similarities
-                - 'intraiSIM': Intrinsic intra-library similarity
-                - 'interiSIM': Intrinsic inter-library similarity
-            lib1_name (str, optional): Name of the first library. If None and only two libraries
-                exist, automatically uses both. Defaults to None.
-            lib2_name (str, optional): Name of the second library. If None and only two libraries
-                exist, automatically uses both. Defaults to None.
-        
-        Returns:
-            float: Similarity score between medoids of the two libraries.
-            
-        Raises:
-            ValueError: If specified libraries don't exist or if library names are required but not provided.
-            """
-        if lib1_name is None and lib2_name is None and len(self.libraries) == 2:
-            lib1_name, lib2_name = list(self.libraries.keys())
-        if lib1_name not in self.library_names or lib2_name not in self.library_names:
-            raise ValueError("Both libraries must be specified and exist in the comparison libraries.")
-        
-        
-        lib1 = self.libraries[lib1_name]
-        lib2 = self.libraries[lib2_name]
+        raise ValueError(f"Unknown methodology: {methodology}")
 
-        fps1 = lib1.get_cluster_medoids(return_smiles=False)
-        fps2 = lib2.get_cluster_medoids(return_smiles=False)
+    def compare_two_libraries(
+            self,
+            methodology: str = "intraiSIM",
+            lib1_name: str | None = None,
+            lib2_name: str | None = None,
+            # Parameters for shared cluster analysis
+            threshold: float = THRESHOLD,
+            branching_factor: int = BRANCHING_FACTOR,
+            merge_criterion: str = MERGE_CRITERION,
+            representatives_only: bool = REPRESENTATIVES_ONLY,
+    ) -> float:
+        """Compare two representative libraries."""
 
-        if methodology == 'MaxSum':
-            sim_matrix = jt_sim_matrix_between_packed(
-            np.array(fps1),
-            np.array(fps2),
-        )
-            return MaxSum(sim_matrix)
+        if methodology in {'intraiSIM', 'interiSIM', 'MaxSum', '_MaxSum', 'MinSum', '_MinSum'}:
+            fps1, fps2 = self._get_pair_fingerprints(lib1_name, lib2_name)
+            return self._compare_fingerprints(fps1, fps2, methodology)
         
-        if methodology == 'MinSum':
-            sim_matrix = jt_sim_matrix_between_packed(
-            np.array(fps1),
-            np.array(fps2),
-        )
-            return MinSum(sim_matrix)
-
-        if methodology == 'intraiSIM':
-            return intraiSIM(
-                np.array(fps1),
-                np.array(fps2),
+        if methodology == "shared-clusters":
+            if lib1_name == lib2_name:
+                return 100.0  # A library is always 100% shared with itself
+            results = self._cluster_library_pair(
+                self.libraries[lib1_name],
+                self.libraries[lib2_name],
+                threshold=threshold,
+                branching_factor=branching_factor,
+                merge_criterion=merge_criterion
             )
+            return LibComparison.shared_space_fraction(results,
+                                                       representatives_only=representatives_only)
         
-        if methodology == 'interiSIM':
-            return interiSIM(
-                np.array(fps1),
-                np.array(fps2),
-            )
-        
-    def compare_medoids_all(self,
-                            methodology: str = 'MaxSum',
-                            ) -> list[list[float]]:
-        """Compare medoids between all library pairs.
-        
-        Performs pairwise medoid comparisons for all libraries and returns a symmetric
-        similarity matrix. Uses symmetry to avoid redundant calculations.
-        
-        Args:
-            methodology (str, optional): Comparison methodology. Defaults to 'MaxSum'.
-                - 'MaxSum': Maximum sum of pairwise similarities
-                - 'MinSum': Minimum sum of pairwise similarities
-                - 'intraiSIM': Intrinsic intra-library similarity
-                - 'interiSIM': Intrinsic inter-library similarity
-        
-        Returns:
-            list[list[float]]: Symmetric similarity matrix where element [i][j] represents
-                the similarity between library i and library j.
-        """
-        results = []
-
-        for i, library_1 in enumerate(self.library_names):
-            result_line = []
-            for j, library_2 in enumerate(self.library_names):
-                if j < i:  # Use the symmetrical value
-                    result_line.append(results[j][i])
-                else:  # Compute the value
-                    k = self.compare_medoids(methodology=methodology,
-                                            lib1_name=library_1,
-                                            lib2_name=library_2)
-                    result_line.append(k)
-            results.append(result_line)
-
+    def compare_all_libraries(
+            self,
+            methodology: str = "intraiSIM",
+            # Parameters for shared cluster analysis
+            threshold: float = THRESHOLD,
+            branching_factor: int = BRANCHING_FACTOR,
+            merge_criterion: str = MERGE_CRITERION,
+            representatives_only: bool = REPRESENTATIVES_ONLY,
+    ) -> np.ndarray:
+        """Compare all registered libraries pairwise."""
+        library_names = list(self.libraries.keys())
+        n = len(library_names)
+        results = np.zeros((n, n))
+        for i in range(n):
+            for j in range(i, n):
+                lib1_name = library_names[i]
+                lib2_name = library_names[j]
+                value = self.compare_two_libraries(
+                    methodology=methodology,
+                    lib1_name=lib1_name,
+                    lib2_name=lib2_name,
+                    threshold=threshold,
+                    branching_factor=branching_factor,
+                    merge_criterion=merge_criterion,
+                    representatives_only=representatives_only,
+                )
+                results[i, j] = value
+                results[j, i] = value  # Symmetric matrix
         return results
 
-    def compare_medoids_heatmap(self,
-                                methodology: str = 'MaxSum',
-                                save_path: str = None) -> None:
-        """Generate a heatmap visualizing medoid comparisons across all libraries.
-        
-        Creates a symmetric heatmap showing pairwise similarities between all libraries
-        based on their cluster medoids.
-        
-        Args:
-            methodology (str, optional): Comparison methodology. Defaults to 'MaxSum'.
-                - 'MaxSum': Maximum sum of pairwise similarities
-                - 'MinSum': Minimum sum of pairwise similarities
-                - 'intraiSIM': Intrinsic intra-library similarity
-                - 'interiSIM': Intrinsic inter-library similarity
-            save_path (str, optional): File path to save the heatmap. If None, displays 
-                the heatmap without saving. Defaults to None.
-        """
-        from ..visualization.plots import symmetric_heatmap
-        results = self.compare_medoids_all(methodology=methodology)
-        symmetric_heatmap(results,
-                          labels=self.library_names,
-                          save_path=save_path)
-        
-    def cluster_libraries(
+    def compare_all_heatmap(
             self,
-            methodology: str = 'medoids',
-            lib_names: list[str] = None,
-            threshold: float = None,
-            n_samples: int = None,
-            verbose: bool = False,
+            methodology: str = "MaxSum",
+            save_path: str | None = None,
+            # Parameters for shared cluster analysis
+            representatives_only: bool = REPRESENTATIVES_ONLY,
+            threshold: float = THRESHOLD,
+            branching_factor: int = BRANCHING_FACTOR,
+            merge_criterion: str = MERGE_CRITERION,
     ) -> None:
-        """Cluster molecules from multiple libraries into a combined library.
-        
-        Creates a combined library by merging molecules from selected libraries and
-        performing hierarchical clustering. The combined library is stored in the
-        combined_library attribute.
-        
-        Args:
-            methodology (str, optional): Clustering approach. Defaults to 'medoids'.
-                - 'medoids': Uses cluster medoids from each library
-                - 'samples': Uses stratified samples from each library
-            lib_names (list[str], optional): Libraries to include. If None, uses all 
-                registered libraries. Defaults to None.
-            threshold (float, optional): Custom clustering threshold. If None, uses the 
-                maximum threshold among included libraries. Defaults to None.
-            n_samples (int, optional): Number of samples per library when methodology is 
-                'samples'. Ignored for 'medoids'. Defaults to None.
-            verbose (bool, optional): If True, prints progress information. Defaults to False.
-            
-        Raises:
-            ValueError: If methodology is not 'medoids' or 'samples'.
+        """Generate a heatmap for all representative-library comparisons."""
+        from ..visualization.plots import symmetric_heatmap
+
+        symmetric_heatmap(
+            self.compare_all_libraries(methodology=methodology,
+                                       representatives_only=representatives_only,
+                                       threshold=threshold,
+                                       branching_factor=branching_factor,
+                                       merge_criterion=merge_criterion),
+            labels=list(self.libraries.keys()),
+            save_path=save_path,
+        )
+
+    ##### BELOW IS CLUSTERING METHODS #####
+    def cluster_libraries(self,
+                          threshold: float = None,
+                          branching_factor: int = BRANCHING_FACTOR,
+                          merge_criterion: str = MERGE_CRITERION) -> dict:
+        """Cluster all or specified libraries together, tracking origin and composition.
+
+        Parameters
+        ----------
+        library_names : list[str] | None
+            Libraries to cluster. If None, clusters all registered libraries.
+        threshold : float
+            Similarity threshold for clustering.
+        branching_factor : int
+            BitBirch branching factor.
+        merge_criterion : str
+            BitBirch merge criterion.
+
+        Returns
+        -------
+        dict
+            Clustering results with keys:
+            - 'cluster_ids': list of cluster indices per molecule
+            - 'cluster_flags': list of library origins per cluster
+            - 'cluster_sizes_count': count of clusters
+            - 'composition_counts': counts by library combination
         """
-        if methodology == 'medoids':
-            combined_lib = self._cluster_medoid_mix(threshold=threshold,
-                                                          lib_names=lib_names,
-                                                          verbose=verbose)
-        elif methodology == 'samples':
-            combined_lib = self._cluster_sample_mix(n_samples=n_samples,
-                                                         threshold=threshold,
-                                                         lib_names=lib_names,
-                                                         verbose=verbose)
+        library_names = list(self.libraries.keys())
+
+        print(
+        "Clustering libraries together: "
+        + ", ".join(library_names)
+        )
+                
+        # Obtaining fingerprint and flags from LibChem objects
+        n_total = sum([self.libraries[name].n_molecules for name in library_names])
+
+        # Retrieve flags
+        flags_list = np.empty(n_total, dtype=object)
+
+        # Retrieve cluster
+        sizes_list = np.empty(n_total, dtype=int)
+
+        # Fingerprint generation, size tracking, and flag collection
+        if self.libraries[library_names[0]].fingerprints is not None:
+            dimension = self.libraries[library_names[0]].fingerprints.shape[1]
+            fps_combined = np.zeros((n_total, dimension), dtype=np.uint8)
+            tracker = 0
         else:
-            raise ValueError("Methodology must be either 'medoids' or 'samples'.")
+            self._generate_default_fps(self.libraries[library_names[0]], library_names[0])
+            dimension = self.libraries[library_names[0]].fingerprints.shape[1]
+            fps_combined = np.zeros((n_total, dimension), dtype=np.uint8)
+            tracker = self.libraries[library_names[0]].fingerprints.shape[0]
+            fps_combined[:tracker, :] = self.libraries[library_names[0]].fingerprints
+            flags_list[:tracker] = self.libraries[library_names[0]].flags
+            sizes_list[:tracker] = self.libraries[library_names[0]].cluster_sizes
 
-        self.combined_library = combined_lib
+        for k, library in enumerate(library_names):
+            if tracker > 0 and k == 0:
+                continue  # Skip first library since already processed
+            if self.libraries[library].fingerprints is None:
+                self._generate_default_fps(self.libraries[library], library)
+            fps_combined[tracker:tracker + self.libraries[library].n_molecules, :] = self.libraries[library].fingerprints
+            flags_list[tracker:tracker + self.libraries[library].n_molecules] = self.libraries[library].flags
+            sizes_list[tracker:tracker + self.libraries[library].n_molecules] = self.libraries[library].cluster_sizes
+            assert (
+            self.libraries[library].n_molecules
+            == self.libraries[library].fingerprints.shape[0]
+            == len(self.libraries[library].flags)
+            ), (
+                f"Mismatch in molecule count, fingerprint count, and "
+                f"flag count for library '{library}'."
+            )
+            tracker += self.libraries[library].n_molecules
 
-    def _cluster_medoid_mix(self,
-                            threshold: float = None,
-                            lib_names: list[str] = None,
-                            verbose: bool = False) -> 'LibChem':
-        """Cluster combined medoids from multiple libraries.
-        
-        Internal method that creates a combined library from cluster medoids of selected
-        libraries, shuffles them for unbiased clustering, and performs hierarchical clustering.
-        
-        Args:
-            threshold (float, optional): Custom clustering threshold. If None, uses the 
-                maximum threshold among included libraries. Defaults to None.
-            lib_names (list[str], optional): Libraries to include. If None, uses all 
-                registered libraries. Defaults to None.
-            verbose (bool, optional): If True, prints progress information. Defaults to False.
-        
-        Returns:
-            LibChem: Combined library with clustered medoids.
-            
-        Raises:
-            ValueError: If fewer than two libraries are specified or if a library name is not found.
-            
-        Note:
-            This is an internal method. Use cluster_libraries() instead.
-        """
-        if lib_names is None:
-            lib_names = list(self.library_names)
-        if len(lib_names) < 2:
-            raise ValueError("At least two libraries must be specified for comparison.")
-        
-        medoids_fps = []
-        medoids_smiles = []
-        medoids_flags = []
-        for lib_name in lib_names:
-            if lib_name not in self.library_names:
-                raise ValueError(f"Library '{lib_name}' not found in comparison libraries.")
-            
-            lib_medoids_fps, lib_medoids_smiles = self.libraries[lib_name].get_cluster_medoids(return_smiles=True)
-            medoids_fps.extend(lib_medoids_fps)
-            medoids_smiles.extend(lib_medoids_smiles)
-            medoids_flags.extend([lib_name] * len(lib_medoids_smiles))
-            if verbose:
-                print(f'Number of medoids in Library {lib_name}: {len(lib_medoids_smiles)}')
-            
-        medoids_fps = np.array(medoids_fps)
-        n_medoids = len(medoids_fps)
-        
-        if verbose:
-            print(f'Total number of medoids: {n_medoids}')
-        
-        # Create a new LibChem instance for combined medoids
-        from .lib_chem import LibChem
-        combined_lib = LibChem()
-        
-        # Shuffle the fingerprints before clustering
-        indices = np.arange(len(medoids_fps))
-        np.random.seed(42)  # For reproducibility
-        np.random.shuffle(indices)
-        medoids_fps = medoids_fps[indices]
-        medoids_flags = [medoids_flags[i] for i in indices]
-        medoids_smiles = [medoids_smiles[i] for i in indices]
+        assert tracker == n_total, "Mismatch in total molecule count and fingerprint tracking."
 
-        # Load the combined medoids into the new library
-        combined_lib.set_fingerprints(
-            fingerprints = medoids_fps,
-            packed = True,
-        )
+        # Save temp_fingerprint file
+        np.save("temp_fingerprints.npy", fps_combined)
 
-        # Set the smiles and the flags
-        combined_lib.set_smiles(medoids_smiles)
-        combined_lib.set_flags(medoids_flags)
+        # Cluster
+        cluster_ids = cluster(file_path="temp_fingerprints.npy",
+                threshold=threshold,
+                branching_factor=branching_factor,
+                merge_criterion=merge_criterion,)
 
-        # Define what threshold to use
-        if threshold is None:
-            combined_lib.set_threshold()
-            threshold_combined = combined_lib.threshold
-            library_thresholds = [self.libraries[name].threshold for name in lib_names if self.libraries[name].threshold is not None]
-            library_thresholds.append(threshold_combined)
-            threshold_final = max(library_thresholds)
-            if verbose:
-                print(f'Using clustering threshold: {threshold_final:.4f}')
+        # Delete temp file
+        import os
+        os.remove("temp_fingerprints.npy")
+
+        cluster_flags = self._group_flags_by_cluster(cluster_ids, flags_list)
+        cluster_sizes = self._group_flags_by_cluster(cluster_ids, sizes_list)
+        cluster_smiles = self._group_flags_by_cluster(cluster_ids, np.concatenate([self.libraries[name].smiles for name in library_names]))
+        cluster_compositions = composition_per_cluster(cluster_flags)
+        weighted_compositions = weighted_composition_per_cluster(cluster_flags, cluster_sizes)
+
+        from ._libchem_aux import combo_counts, weighted_combo_counts
+        composition_counts, composition_mapping = combo_counts(cluster_flags, library_names)
+        weighted_composition_counts, _ = weighted_combo_counts(cluster_flags, cluster_sizes, library_names)
+
+        self.cluster_results = {
+            # Raw clustering outputs
+            'cluster_ids': cluster_ids,
+            'cluster_flags': cluster_flags,
+            'cluster_sizes': cluster_sizes,
+            'cluster_smiles': cluster_smiles,
+
+            # Per-cluster composition outputs
+            'cluster_compositions': cluster_compositions,
+            'cluster_compositions_weighted': weighted_compositions,
+
+            # Overlap counts outputs
+            'overlap_counts': composition_counts,
+            'overlap_counts_weighted': weighted_composition_counts,
+
+            # Overlap mapping outputs
+            'overlap_mapping': composition_mapping
+        }
+
+    def get_cluster_results(self, **kwargs):
+        """Return clustering results.
+        Accepts:
+        'cluster_ids': list of of lists with molecule indices per cluster (order as loaded)
+        'cluster_flags': list of lists with flag values per cluster
+        'cluster_sizes': list of cluster sizes
+        'cluster_smiles': list of lists with SMILES strings per cluster
+        'cluster_compositions': list of compositions per cluster
+        'cluster_compositions_weighted': list of weighted compositions per cluster
+        'overlap_counts': list of overlap counts per cluster
+        'overlap_counts_weighted': list of weighted overlap counts per cluster
+        'overlap_mapping': dictionary mapping overlap counts to cluster IDs"""
+        if not self.cluster_results:
+            raise ValueError("No clustering results available. Please run cluster_libraries() first.")
+        if kwargs:
+            # Validate kwargs
+            valid_keys = {'cluster_ids', 'cluster_flags', 'cluster_sizes', 'cluster_smiles',
+                          'cluster_compositions', 'cluster_compositions_weighted',
+                          'overlap_counts', 'overlap_counts_weighted', 'overlap_mapping'}
+            for key in kwargs:
+                if key not in valid_keys:
+                    raise ValueError(f"Invalid key '{key}' in kwargs. Valid keys are: {valid_keys}")
+            return {key: self.cluster_results[key] for key in kwargs}
+        return self.cluster_results
+    
+    @staticmethod
+    def shared_space_fraction(clustering_results: dict,
+                              representatives_only: bool = REPRESENTATIVES_ONLY) -> float:
+        """Compute the fraction of clusters that are shared between libraries."""
+        if clustering_results is None:
+            raise ValueError("No clustering results provided.")
+        
+        if representatives_only:
+            data = clustering_results['overlap_counts']
         else:
-            threshold_final = threshold
-            if verbose:
-                print(f'Using clustering threshold: {threshold_final:.4f}')
+            data = clustering_results['overlap_counts_weighted']
 
-        # Do the clustering
-        combined_lib.set_threshold(threshold=threshold_final)
-        combined_lib.cluster()
+        total = sum(data.values())
+        shared = 0
+        for key, count in data.items():
+            if "+" in key:  # Indicates a shared cluster
+                shared += count
 
-        return combined_lib
-    
-    def _cluster_sample_mix(self,
-                            n_samples: int = None,
-                            threshold: float = None,
-                            lib_names: list[str] = None,
-                            verbose: bool = False) -> 'LibChem':
-        """Cluster combined stratified samples from multiple libraries.
-        
-        Internal method that draws stratified samples from selected libraries, combines
-        and shuffles them, then performs hierarchical clustering.
-        
-        Args:
-            n_samples (int, optional): Number of samples to draw from each library. 
-                Defaults to None.
-            threshold (float, optional): Custom clustering threshold. If None, uses the 
-                maximum threshold among included libraries. Defaults to None.
-            lib_names (list[str], optional): Libraries to include. If None, uses all 
-                registered libraries. Defaults to None.
-            verbose (bool, optional): If True, prints progress information. Defaults to False.
-        
-        Returns:
-            LibChem: Combined library with clustered samples.
-            
-        Raises:
-            ValueError: If fewer than two libraries are specified or if a library name is not found.
-            
-        Note:
-            This is an internal method. Use cluster_libraries() instead.
+        return (shared * 100) / total if total > 0 else 0.0
+
+    @staticmethod
+    def _cluster_library_pair(lib1 : LibChem,
+                             lib2 : LibChem,
+                             threshold: float = None,
+                             branching_factor: int = BRANCHING_FACTOR,
+                             merge_criterion: str = MERGE_CRITERION) -> dict:
+        """Cluster two libraries together and compute shared cluster space fraction."""
+        # Create a temporary LibComparison object with just the two libraries
+        temp_comparison = LibComparison(lib1, lib2)
+
+        temp_comparison.cluster_libraries(
+            threshold=threshold,
+            branching_factor=branching_factor,
+            merge_criterion=merge_criterion
+        )
+
+        return temp_comparison.cluster_results
+
+    @staticmethod
+    def _generate_default_fps(lib, name):
+        lib.generate_fingerprints(
+            fp_type=FINGERPRINT_TYPE,
+            n_bits=N_BITS,
+            packed=True
+        )
+        print(f"Generating fingerprints for library '{name}'...")
+        print(f"Using default parameters: {FINGERPRINT_TYPE}, {N_BITS} bits.")
+        print("Pre-generate fingerprints if other fp_type or n_bits are desired.")
+
+    @staticmethod
+    def _group_flags_by_cluster(
+            cluster_ids: list,
+            flags: list,
+    ) -> list:
+        """Group flags by cluster ID.
+
+        Returns
+        -------
+        list
+            Per-cluster list of flags, indexed by cluster ID.
         """
-        if lib_names is None:
-            lib_names = list(self.library_names)
-        if len(lib_names) < 2:
-            raise ValueError("At least two libraries must be specified for comparison.")
+        cluster_flags = []
 
-        sampled_fps = []
-        sampled_smiles = []
-        sampled_flags = []
+        for cluster in cluster_ids:
+            cluster_flags.append([flags[mol_idx] for mol_idx in cluster])
 
-        # collect samples from each library
-        for lib_name in lib_names:
-            if lib_name not in self.library_names:
-                raise ValueError(f"Library '{lib_name}' not found in comparison libraries.")
-            lib = self.libraries[lib_name]
-            # get_cluster_samples returns (fps, smiles) when return_smiles=True
-            fps, smiles = lib.get_cluster_samples(n_samples=n_samples, return_smiles=True, return_cluster_ids=False)
-            if verbose:
-                print(f'Number of sampled mols in Library {lib_name}: {len(fps)}')
-            sampled_fps.extend(list(fps))
-            sampled_smiles.extend(smiles)
-            sampled_flags.extend([lib_name] * len(fps))
+        return cluster_flags
+    
+    @staticmethod
+    def _exclusive_shared_from_composition(
+        composition,
+    ):
+        """
+        Compute the fraction of each library that appears in
+        exclusive clusters versus clusters shared with other libraries.
 
-        # combine and shuffle
-        sampled_fps = np.array(sampled_fps)
-        n_total = len(sampled_fps)
-        if verbose:
-            print(f'Total number of sampled mols: {n_total}')
-        indices = np.arange(n_total)
-        np.random.seed(42)  # For reproducibility
-        np.random.shuffle(indices)
-        sampled_fps = sampled_fps[indices]
-        sampled_smiles = [sampled_smiles[i] for i in indices]
-        sampled_flags = [sampled_flags[i] for i in indices]
+        When weighted=True, contributions are weighted by the
+        represented population size.
 
-        # create combined LibChem and load fingerprints
-        from .lib_chem import LibChem
-        combined_lib = LibChem()
-        combined_lib.set_fingerprints(fingerprints=sampled_fps, packed=True)
-        
-        # set smiles and flags on combined lib
-        combined_lib.set_smiles(sampled_smiles)
-        combined_lib.set_flags(sampled_flags)
+        When weighted=False, contributions are based on
+        representative counts only.
 
-        # determine threshold to use
-        if threshold is None:
-            combined_lib.set_threshold()
-            threshold_combined = combined_lib.threshold
-            library_thresholds = [self.libraries[name].threshold for name in lib_names if self.libraries[name].threshold is not None]
-            library_thresholds.append(threshold_combined)
-            threshold_final = max(library_thresholds)
-            if verbose:
-                print(f'Using clustering threshold: {threshold_final:.4f}')
+        Parameters
+        ----------
+        composition : list[Counter]
+            Output of weighted_composition_per_cluster() or composition_per_cluster()
+
+        Returns
+        -------
+        dict
+            Per-library totals, exclusive and shared masses.
+        """
+
+        total = defaultdict(float)
+        exclusive = defaultdict(float)
+        shared = defaultdict(float)
+
+        for comp in composition:
+
+            # comp = Counter({lib: weight_in_cluster})
+            unique_libs = list(comp.keys())
+
+            # accumulate totals first
+            for lib, mass in comp.items():
+                total[lib] += mass
+
+            # exclusive cluster
+            if len(unique_libs) == 1:
+                lib = unique_libs[0]
+                exclusive[lib] += comp[lib]
+
+            # shared cluster
+            else:
+                for lib, mass in comp.items():
+                    shared[lib] += mass
+
+        return {
+            lib: {
+                "total": float(total[lib]),
+                "exclusive": float(exclusive[lib]),
+                "shared": float(shared[lib]),
+            }
+            for lib in total
+        }
+
+    @staticmethod
+    def exclusive_shared_proportions(
+        cluster_flags,
+        cluster_sizes=None,
+        representatives_only = REPRESENTATIVES_ONLY,
+
+    ):
+        """
+        Compute exclusive vs shared contributions using composition output.
+        User can choose to use either representative counts (composition) or weighted composition.
+
+        Parameters
+        ----------
+        cluster_flags : list
+            Per-cluster list of flags, indexed by cluster ID.
+        cluster_sizes : list
+            Per-cluster list of sizes, indexed by cluster ID.
+        representatives_only : bool
+            Whether to use only representative counts (True) or all counts (False).
+
+        Returns
+        -------
+        dict
+            Per-library totals, exclusive and shared fractions.
+        """
+        if representatives_only:
+            composition = composition_per_cluster(
+                cluster_flags
+            )
         else:
-            threshold_final = threshold
-            if verbose:
-                print(f'Using clustering threshold: {threshold_final:.4f}')
+            assert cluster_sizes is not None, "cluster_sizes must be provided when weighted composition is desired."
+            composition = weighted_composition_per_cluster(
+                cluster_flags,
+                cluster_sizes,
+            )
 
-        # cluster with the chosen threshold
-        combined_lib.set_threshold(threshold=threshold_final)
-        combined_lib.cluster()
+        stats = LibComparison._exclusive_shared_from_composition(
+            composition
+        )
 
-        return combined_lib
+        # convert to fractions
+        for lib in stats:
+            total = stats[lib]["total"]
+            stats[lib]["exclusive_fraction"] = stats[lib]["exclusive"] / total if total else 0.0
+            stats[lib]["shared_fraction"] = stats[lib]["shared"] / total if total else 0.0
+
+        return stats
     
-    def cluster_classification_counts(self,
-                            lib_names: list[str] = None,
-                            ) -> tuple:
-        """Get counts and mapping of cluster compositions by library.
-        
-        Analyzes the combined library clusters to determine which libraries contribute
-        molecules to each cluster and in what proportions.
-        
-        Args:
-            lib_names (list[str], optional): Libraries to include in analysis. If None, 
-                uses all registered libraries. Defaults to None.
-
-        Returns:
-            tuple: A tuple containing:
-                - counts (dict): Dictionary mapping cluster composition patterns to counts
-                - combo_map (dict): Dictionary mapping patterns to cluster indices
-                
-        Raises:
-            ValueError: If no combined library exists (cluster_libraries() must be called first).
+    def venn_diagram_overlap(self,
+                            percentages : bool = False,
+                            save_path: str | None = None,
+                            representatives_only : bool = REPRESENTATIVES_ONLY) -> None:
         """
-        if self.combined_library is None:
-            raise ValueError("No combined library found. Please run cluster_libraries() first.")
+        Generate a Venn diagram of library overlaps.
+        Accepts a maximum of 3 libraries for visualization purposes.
+        For more use the upset plot.
+
+        Parameters
+        ----------
+        library_names : list[str]
+            Libraries to include in the Venn diagram.
+        representatives_only : bool
+            Whether to use only representative counts (True) or all counts (False).
+
+        Returns
+        -------
+        img | None
+            Venn diagram image object or None if saved to a file.
+        """
+        from ..visualization.plots import venn_overlap
+
+        library_names = list(self.libraries.keys())
+
+        if len(library_names) > 3:
+            raise ValueError("Venn diagram visualization is limited to a maximum of 3 libraries.")
         
-        # Use combo_counts helper to get exact mapping and counts
-        lib_names = lib_names if lib_names is not None else list(self.library_names)
-        counts, combo_map = combo_counts(self.combined_library.get_cluster_flags(), library_names=lib_names)
-        return counts, combo_map
+        # Get the overlap counts
+        if representatives_only:
+            overlap_counts = self.cluster_results['overlap_counts']
+        else:
+            overlap_counts = self.cluster_results['overlap_counts_weighted']
+
+        # Generate the Venn diagram
+        venn_overlap(
+            overlap_counts=overlap_counts,
+            library_names=library_names,
+            percentages=percentages,
+            save_path=save_path
+        )
+
     
-    def pie_chart_composition(self,
-                              lib_names: list[str] = None,
-                              save_path: str = None,
-                              ) -> None:
-        """Generate a pie chart showing cluster composition by library.
-        
-        Visualizes how molecules from different libraries are distributed across
-        mixed clusters in the combined library.
-        
-        Args:
-            lib_names (list[str], optional): Libraries to include in the chart, in the same 
-                order used for clustering. If None, uses all libraries. Defaults to None.
-            save_path (str, optional): File path to save the chart. If None, displays 
-                without saving. Defaults to None.
-                
-        Raises:
-            ValueError: If no combined library exists (cluster_libraries() must be called first).
+    def upset_plot_overlap(self,
+                           percentages: bool = False,
+                           save_path: str | None = None,
+                           representatives_only: bool = REPRESENTATIVES_ONLY) -> None:
         """
-        from ..visualization.plots import pie_chart_mixed_clusters
-        if self.combined_library is None:
-            raise ValueError("No combined library found. Please run cluster_libraries() first.")
-        labels = lib_names if lib_names is not None else list(self.library_names)
-        counts, _ = combo_counts(self.combined_library.get_cluster_flags(), library_names=labels)
-        pie_chart_mixed_clusters(counts, save_path=save_path)
+        Generate an UpSet plot of library overlaps.
+        Useful for visualizing overlaps between more than 3 libraries.
 
-    def venn_diagram_composition(self,
-                                lib_names: list[str] = None,
-                                save_path: str = None,
-                                upset: bool = False,
-                                ) -> None:
-        """Generate a Venn diagram showing overlap in cluster compositions.
+        Parameters
+        ----------
+        library_names : list[str]
+            Libraries to include in the UpSet plot.
+        percentages : bool
+            Whether to display percentages instead of raw counts.
+        representatives_only : bool
+            Whether to use only representative counts (True) or all counts (False).
         
-        Visualizes the overlap and unique contributions of different libraries to
-        the combined cluster structure using a Venn diagram.
+        Returns
+        ----------
+        img | None
+            UpSet plot image object or None if saved to a file.
+        """
 
-        Args:
-            lib_names (list[str], optional): Libraries to include in the diagram, in the same 
-                order used for clustering. If None, uses all libraries. Defaults to None.
-            save_path (str, optional): File path to save the diagram. If None, displays 
-                without saving. Defaults to None.
-            upset (bool, optional): If True, generate an UpSet plot instead of a Venn diagram. 
-                Defaults to False.
-                
-        Raises:
-            ValueError: If no combined library exists (cluster_libraries() must be called first).
-        """
-        from ..visualization.plots import venn_lib_comp
-        if self.combined_library is None:
-            raise ValueError("No combined library found. Please run cluster_libraries() first.")
-        counts, _ = combo_counts(self.combined_library.get_cluster_flags(), library_names=lib_names if lib_names is not None else self.library_names)
-        venn_lib_comp(counts, lib_names=lib_names if lib_names is not None else self.library_names, save_path=save_path, upset=upset)
+        from ..visualization.plots import upset_overlap
 
-    def cluster_composition_counts(self,
-                                   top: int = 20
-                                   ) -> list[Counter]:
-        """Get detailed composition of the largest clusters.
-        
-        Analyzes the top N largest clusters to determine which libraries contribute
-        molecules to each cluster.
-        
-        Args:
-            top (int, optional): Number of largest clusters to analyze. Defaults to 20.
-            
-        Returns:
-            list[Counter]: List of Counter objects, one per cluster, mapping library 
-                names to molecule counts in that cluster.
-                
-        Raises:
-            ValueError: If no combined library exists (cluster_libraries() must be called first).
-        """
-        if self.combined_library is None:
-            raise ValueError("No combined library found. Please run cluster_libraries() first.")
-        composition = composition_per_cluster(
-            self.combined_library.get_cluster_flags(),
-            top=top,
-        )
-        return composition
-    
-    def plot_cluster_composition(self,
-                                lib_names: list[str],
-                                top: int = 20,
-                                save_path: str = None,
-                                 ) -> None:
-        """Generate a bar chart showing composition of the largest clusters.
-        
-        Creates a stacked bar chart displaying how molecules from different libraries
-        are distributed across the top N largest clusters.
-        
-        Args:
-            lib_names (list[str]): Libraries to include in the chart, in the same order 
-                used for clustering. This is a required parameter.
-            top (int, optional): Number of largest clusters to plot. Defaults to 20.
-            save_path (str, optional): File path to save the chart. If None, displays 
-                without saving. Defaults to None.
-                
-        Raises:
-            ValueError: If no combined library exists (cluster_libraries() must be called first).
-        """
-        from ..visualization.plots import bar_chart_library_comparison
-        if self.combined_library is None:
-            raise ValueError("No combined library found. Please run cluster_libraries() first.")
-        composition = composition_per_cluster(
-            self.combined_library.get_cluster_flags(),
-            top=top,
-        )
-        bar_chart_library_comparison(
-            values = composition,
-            lib_names = lib_names,
-            save_path = save_path,
+        library_names = list(self.libraries.keys())
+
+
+        # Get the overlap counts        
+        if representatives_only:
+            overlap_counts = self.cluster_results['overlap_counts']
+        else:
+            overlap_counts = self.cluster_results['overlap_counts_weighted']
+
+        # Generate the UpSet plot
+        upset_overlap(
+            overlap_counts=overlap_counts,
+            library_names=library_names,
+            percentages=percentages,
+            save_path=save_path
         )
 
-    def cluster_visualization(self,
-                              cluster_number: int,
-                              save_path: str = None,
-                              ):
-        """Visualize molecules in a specific cluster with Maximum Common Substructure (MCS).
-        
-        Generates a grid image showing representative molecules from the specified cluster,
-        highlighting the maximum common substructure and color-coding by library origin.
-        
-        Args:
-            cluster_number (int): Zero-based index of the cluster to visualize.
-            save_path (str, optional): File path to save the image. If None, returns the 
-                image object without saving. Defaults to None.
-        
-        Returns:
-            PIL.Image or None: Returns the image object if save_path is None, otherwise None.
-            
-        Raises:
-            ValueError: If no combined library exists (cluster_libraries() must be called first).
+    def display_cluster_molecules(
+            self,
+            cluster_id: int,
+            mols_per_row: int = 5,
+            sub_img_size=(250, 250),
+            display_MCS: bool = True,
+            save_path: str | None = None,
+    ):
         """
-        if self.combined_library is None:
-            raise ValueError("No combined library found. Please run cluster_libraries() first.")
-        from ..visualization.mol_images import cluster_mix_MCS_image
-        if cluster_number > len(self.combined_library.clusters) - 1:
-            raise ValueError(f"Cluster number {cluster_number} is out of range. There are only {len(self.combined_library.clusters)} clusters.")
-        img = cluster_mix_MCS_image(
-            cluster = self.combined_library.clusters[cluster_number],
-            smiles = self.combined_library.smiles,
-            flags = self.combined_library.flags,
-            n_samples = 25,
-            MCS_threshold = 0.75,
-            save_path = save_path,
+        Display molecules from a cluster with the maximum common
+        substructure highlighted if needed.
+
+        Parameters
+        ----------
+        cluster_id
+            Cluster to visualize.
+        """
+
+        if self.cluster_results is None:
+            raise ValueError("No clustering results available.")
+
+        if cluster_id >= len(self.cluster_results["cluster_ids"]):
+            raise ValueError(
+                f"Cluster {cluster_id} not found."
+            )
+
+        cluster_smiles = self.cluster_results["cluster_smiles"][cluster_id]
+        cluster_flags = self.cluster_results["cluster_flags"][cluster_id]
+
+        from ..visualization.mol_images import smiles_to_grid_image
+        img = smiles_to_grid_image(
+            cluster_smiles,
+            mols_per_row=mols_per_row,
+            sub_img_size=sub_img_size,
+            legends=cluster_flags,
+            MSC=display_MCS,
         )
-        if save_path is None:
+
+        if save_path:
+            img.save(save_path)
+        else:
             return img

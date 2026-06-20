@@ -5,7 +5,6 @@ import seaborn as sns # type: ignore
 from seaborn import heatmap # type: ignore
 #import plotly.graph_objects as go
 from collections import Counter, defaultdict
-import iChem.bitbirch.similarity as iSIM
 
 def clusters_pop_plot(bitbirch_obj,
                       save_path: str = None,
@@ -189,118 +188,192 @@ def bar_chart_library_comparison(values: list[Counter],
     else:
         plt.show()
 
-def venn_lib_comp(counts: dict,
-                  lib_names: list = None,
-                save_path: str = None,
-                upset = False):
-    """Generate a Venn diagram showing library overlaps for 2-3 libraries, or UpSet plot for 4+ libraries.
+def venn_overlap(
+    overlap_counts: dict,
+    library_names: list[str],
+    percentages: bool = True,
+    save_path: str | None = None,
+):
+    """
+    Plot a 2- or 3-library Venn diagram from overlap counts.
 
-    Args:
-        counts (dict): Dictionary with library overlap counts.
-        lib_names (list): List of library names.
-        save_path (str, optional): Path to save the visualization. Defaults to None.
+    Parameters
+    ----------
+    overlap_counts : dict
+        Output of combo_counts() or weighted_combo_counts().
 
-    Returns:
-        fig: Matplotlib figure object.
+    library_names : list[str]
+        Ordered list of library names.
+
+    percentages : bool
+        Display percentages instead of raw counts.
+
+    save_path : str | None
+        Optional path to save figure.
     """
 
-    n_libs = len(lib_names)
-    
-    # Get total number of clusters for calculation of percentages
-    total_clusters = sum(counts.values())
+    import matplotlib.pyplot as plt
+    from matplotlib_venn import venn2, venn3
 
-    # Sort the counts dictionary labels
-    counts = dict(sorted(counts.items()))
+    n_libs = len(library_names)
 
-    # Pass the counts to percentage with only one decimal place
-    counts_pct = {key: round((value / total_clusters) * 100, 1) for key, value in counts.items()}
+    if n_libs not in (2, 3):
+        raise ValueError(
+            "Venn diagrams only support 2 or 3 libraries. "
+            "Use upset_library_overlap() instead."
+        )
 
-    if n_libs <= 3 and not upset:
-        # Use traditional Venn diagrams for 2-3 libraries
-        from matplotlib_venn import venn2, venn3 # type: ignore
-        
-        # Change the count labels to be used in venn diagrams
-        new_counts = {}
-        for key in counts_pct.keys():
-            if len(key.split('+')) == 3:
-                new_counts["111"] = counts_pct[key]
-            elif len(key.split('+')) == 1:
-                if key == lib_names[0]:
-                    new_counts["100"] = counts_pct[key]
-                elif key == lib_names[1]:
-                    new_counts["010"] = counts_pct[key]
-                elif n_libs > 2 and key == lib_names[2]:
-                    new_counts["001"] = counts_pct[key]
-            elif len(key.split('+')) == 2:
-                libs = key.split('+')
-                if lib_names[0] in libs and lib_names[1] in libs:
-                    new_counts["110"] = counts_pct[key]
-                elif n_libs > 2 and lib_names[0] in libs and lib_names[2] in libs:
-                    new_counts["101"] = counts_pct[key]
-                elif n_libs > 2 and lib_names[1] in libs and lib_names[2] in libs:
-                    new_counts["011"] = counts_pct[key]
+    values = overlap_counts.copy()
 
-        # Plot the venn diagram
-        plt.figure(figsize=(6, 6))
-        if n_libs == 2:
-            venn2(subsets=(new_counts.get("100", 0),
-                           new_counts.get("010", 0),
-                           new_counts.get("110", 0)),
-                  set_labels=(f"{lib_names[0]}", f"{lib_names[1]}"),
-                  set_colors=('blue', 'orange'),
-                  alpha=0.75)
-            plt.tight_layout()
-        else:  # n_libs == 3
-            venn3(subsets=(new_counts.get("100", 0),
-                           new_counts.get("010", 0),
-                           new_counts.get("110", 0),
-                           new_counts.get("001", 0),
-                           new_counts.get("101", 0),
-                           new_counts.get("011", 0),
-                           new_counts.get("111", 0)),
-                  set_labels=(f"{lib_names[0]}", f"{lib_names[1]}", f"{lib_names[2]}"),
-                  set_colors=('blue', 'orange', 'green'),
-                  alpha=0.75)
-            plt.tight_layout()
+    if percentages:
+        total = sum(values.values())
+
+        if total > 0:
+            values = {
+                k: round(100 * v / total, 1)
+                for k, v in values.items()
+            }
+
+    venn_counts = {}
+
+    for key, value in values.items():
+
+        libs = key.split("+")
+
+        membership = "".join(
+            "1" if lib in libs else "0"
+            for lib in library_names
+        )
+
+        venn_counts[membership] = value
+
+    plt.figure(figsize=(7, 7))
+
+    if n_libs == 2:
+
+        venn2(
+            subsets=(
+                venn_counts.get("10", 0),
+                venn_counts.get("01", 0),
+                venn_counts.get("11", 0),
+            ),
+            set_labels=library_names,
+        )
+
     else:
-        # Use UpSet plot for 4+ libraries (better than Venn for many sets)
-        try:
-            from upsetplot import UpSet # type: ignore
-            from upsetplot import from_memberships # type: ignore
-            import warnings
-            warnings.filterwarnings("ignore", category=FutureWarning)
-            warnings.filterwarnings("ignore", category=UserWarning)
 
-            # Get the memberships lists
-            members_lists = []
-            for key in counts.keys():
-                members_lists.append(list(key.split('+')))
+        venn3(
+            subsets=(
+                venn_counts.get("100", 0),
+                venn_counts.get("010", 0),
+                venn_counts.get("110", 0),
+                venn_counts.get("001", 0),
+                venn_counts.get("101", 0),
+                venn_counts.get("011", 0),
+                venn_counts.get("111", 0),
+            ),
+            set_labels=library_names,
+        )
 
-            # Create the data structure for UpSet plot
-            upset_data = from_memberships(members_lists, data=list(counts.values()))
-            
-            # Create UpSet plot
-            upset = UpSet(upset_data,
-                          show_percentages=True,
-                          totals_plot_elements=0,
-                          with_lines=True,
-                          element_size=50,
-                          facecolor='C0')
-            fig = plt.figure(figsize=(12, 8))
-            upset.plot(fig=fig)
-            plt.grid(False)
-            
-        except ImportError:
-            # Fallback: create a custom matrix-style visualization
-            print("upsetplot library not installed. Using fallback visualization.")
-            print("Install with: pip install upsetplot")
-    
+    plt.tight_layout()
+
     if save_path:
-        plt.savefig(save_path, dpi=400)
+        plt.savefig(save_path, dpi=400, bbox_inches="tight")
     else:
         plt.show()
 
-    plt.close('all')
+    plt.close()
+
+def upset_overlap(
+    overlap_counts: dict,
+    library_names: list[str],
+    percentages: bool = True,
+    save_path: str | None = None,
+):
+    """
+    Plot an UpSet diagram from overlap counts.
+
+    Parameters
+    ----------
+    overlap_counts : dict
+        Output of combo_counts() or weighted_combo_counts().
+
+    library_names : list[str]
+        Canonical ordered list of libraries (controls axis order).
+
+    percentages : bool
+        If True, convert values to percentages of total overlap mass.
+
+    save_path : str | None
+        Optional path to save figure.
+    """
+
+    import matplotlib.pyplot as plt
+    from upsetplot import UpSet, from_memberships
+    import warnings
+    warnings.filterwarnings("ignore", category=FutureWarning)
+    warnings.filterwarnings("ignore", category=UserWarning)
+
+    # -----------------------------
+    # Normalize values
+    # -----------------------------
+    values = dict(overlap_counts)
+
+    if percentages:
+        total = sum(values.values())
+        if total > 0:
+            values = {k: 100 * v / total for k, v in values.items()}
+
+    # -----------------------------
+    # Build memberships with fixed ordering
+    # -----------------------------
+    memberships = []
+    counts = []
+
+    for key, value in values.items():
+        libs_in_cluster = set(key.split("+"))
+
+        # enforce canonical ordering from library_names
+        memberships.append(
+            [lib for lib in library_names if lib in libs_in_cluster]
+        )
+        counts.append(value)
+
+    # -----------------------------
+    # Build UpSet input
+    # -----------------------------
+    upset_data = from_memberships(
+        memberships,
+        data=counts,
+    )
+
+    fig = plt.figure(figsize=(16, 8))
+
+    upset = UpSet(
+        upset_data,
+        show_percentages=percentages,
+        totals_plot_elements=0,
+        with_lines=True,
+        facecolor="blue",      # bars + dots
+        sort_by="cardinality",   # order of bars on the intersection plot
+    )
+
+    upset.plot(fig=fig)
+
+    # remove grids
+    for ax in fig.axes:
+        ax.grid(False)
+        for text in ax.texts:
+            text.set_fontsize(6)
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=400, bbox_inches="tight")
+    else:
+        plt.show()
+
+    plt.close()
 
 class Node:
     def __init__(self, members, height=0):

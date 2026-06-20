@@ -4,7 +4,10 @@ from pathlib import Path
 from multiprocessing import Pool, cpu_count
 from tqdm import tqdm
 from bblean.similarity import jt_isim_medoid, jt_sim_packed #type: ignore
+from bblean import BitBirch #type: ignore
+from ..bitbirch._config import THRESHOLD, BRANCHING_FACTOR, MERGE_CRITERION, N_BITS
 from ..utils import binary_fps, load_smiles, load_smiles_gzipped
+from ..bitbirch import cluster
 
 
 def _worker_medoid_sampling(cluster_idx: int, cluster: list[int], fps: np.ndarray,
@@ -338,7 +341,7 @@ def sample_clusters(clusters,
     # Load clusters: either path or direct list
     if isinstance(clusters, list):
         pass  # Already a list
-    else:
+    elif isinstance(clusters, str):
         clusters_path = Path(clusters)
         if clusters_path.is_file():
             clusters = pkl.load(open(clusters_path, 'rb'))
@@ -429,3 +432,92 @@ def sample_clusters(clusters,
                                        sample=sample,
                                        sample_min_size=sample_min_size,
                                        n_processes=n_processes)
+    else:
+        raise ValueError(
+            f"Invalid sampling method: {sampling_method}. "
+            "Choose from 'singletons', 'medoids', or 'centroid-like'."
+        )
+    
+def bitbirch_sampling(fps: np.ndarray = None,
+                      smiles: list = None,
+                      sampling_method: str = 'medoids',
+                      min_size: int = 0,
+                      fp_type: str = 'ECFP4',
+                      n_bits: int = N_BITS,
+                      threshold: float = THRESHOLD,
+                      branching_factor: int = BRANCHING_FACTOR,
+                      merge_criterion: str = MERGE_CRITERION,
+                      sample: bool = True,
+                      sample_min_size: int = 1_000,
+                      return_sizes: bool = False) -> list:
+    """Sample using BitBirch clustering medoids directly from fingeprrints and/or smiles.
+    This function does the sequential clustering too.
+    
+    Parameters
+    ----------
+    fps: np.ndarray, optional
+        Precomputed fingerprint array (shape: n_molecules x n_bits).
+    smiles: list, optional
+        List of SMILES strings corresponding to the fingerprints.
+    sampling_method: str, default='medoids'
+        Sampling strategy: 'singletons' (all single-element clusters),
+        'medoids' (most similar compound to cluster median),
+        or 'centroid-like' (most similar to precomputed centroid).
+    min_size: int, default=0
+        Minimum cluster size to sample from (for 'medoids' method).
+    fp_type: str, default='ECFP4'
+        Fingerprint type for computing fingerprints from SMILES if fps not provided.
+    n_bits: int, default=2048
+        Number of bits in fingerprint vectors if fps not provided.
+    threshold: float, default=THRESHOLD
+        Distance threshold for BitBirch clustering.
+    branching_factor: int, default=BRANCHING_FACTOR
+        Branching factor for BitBirch clustering.
+    merge_criterion: str, default=MERGE_CRITERION
+        Merge criterion for BitBirch clustering.
+    sample: bool, default=True
+        If True, subsample large clusters before computing medoid/centroid similarity.
+    sample_min_size: int, default=1000
+        Subsample threshold - clusters larger than this are randomly subsampled.
+        
+    Returns
+    -------
+    list
+        Sampled molecule indices or SMILES strings, depending on input data provided."""
+
+    # Generate fingerprints if not provided, but smiles are available
+    if fps is None and smiles is None:
+        raise ValueError("At least one of fps or smiles must be provided for BitBirch sampling.")
+    if fps is None:
+        fps, invalid = binary_fps(smiles, fp_type=fp_type, n_bits=n_bits)
+
+    if invalid:
+        raise ValueError(f"Invalid SMILES found at indices: {invalid}. Please check your SMILES data.")
+
+    # Save the temporatrly the fps
+    temp_fps_path = Path("temp_fps.npy")
+    np.save(temp_fps_path, fps)
+
+    clusters = cluster(temp_fps_path,
+                       threshold=threshold,
+                       branching_factor=branching_factor,
+                       merge_criterion=merge_criterion)
+
+    samples = sample_clusters(clusters=clusters,
+                              sampling_method=sampling_method,
+                              fps=fps,
+                              smiles=smiles,
+                              min_size=min_size,
+                              fp_type=fp_type,
+                              n_bits=n_bits,
+                              sample=sample,
+                              sample_min_size=sample_min_size)
+    
+    # Delete the temporary fps file
+    if temp_fps_path.exists():
+        temp_fps_path.unlink()
+    
+    if return_sizes:
+        cluster_sizes = [len(cluster) for cluster in clusters]
+        return samples, cluster_sizes
+    return samples
