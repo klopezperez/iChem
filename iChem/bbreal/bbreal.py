@@ -788,21 +788,27 @@ class BBReal():
 
         return clusters_mol_id
     
-    def get_cluster_populations(self) -> list[int]:
+    def get_cluster_populations(self, initial: int = 0, top: int = None) -> list[int]:
         """Method to return the number of molecules in each cluster"""
         if self.first_call:
             raise ValueError('The model has not been fitted yet.')
         
-        clusters_populations = [subcluster.n_samples_ for subcluster in self._get_BFs()]
+        if top is None:
+            clusters_populations = [subcluster.n_samples_ for subcluster in self._get_BFs()]
+        else:
+            clusters_populations = [subcluster.n_samples_ for subcluster in self._get_BFs()[initial:top]]
 
         return clusters_populations
     
-    def get_iSIM_clusters(self) -> list[float]:
+    def get_iSIM_clusters(self, initial: int = 0, top: int = None) -> list[float]:
         """Method to return the iSIM values of each cluster"""
         if self.first_call:
             raise ValueError('The model has not been fitted yet.')
         
-        clusters_iSIM = [jt_isim_real(subcluster.linear_sum_, subcluster.sq_sum, subcluster.n_samples_) for subcluster in self._get_BFs()]
+        if top is None:
+            clusters_iSIM = [jt_isim_real(subcluster.linear_sum_, subcluster.sq_sum, subcluster.n_samples_) for subcluster in self._get_BFs()]
+        else:
+            clusters_iSIM = [jt_isim_real(subcluster.linear_sum_, subcluster.sq_sum, subcluster.n_samples_) for subcluster in self._get_BFs()[initial:top]]
 
         return clusters_iSIM
     
