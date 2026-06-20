@@ -582,6 +582,23 @@ class LibComparison:
             save_path=save_path
         )
 
+    def cluster_population_plot(self,
+                                save_path: str | None = None,
+                                top=20,
+                                initial=0,
+                                representatives_only: bool = REPRESENTATIVES_ONLY,
+                                ):
+        """Generate a plot of cluster populations.
+        Each bar represents a cluster, colored by library composition."""
+
+        composition_key = 'cluster_compositions' if representatives_only else 'cluster_compositions_weighted'
+        from ..visualization.plots import bar_chart_library_comparison
+        bar_chart_library_comparison(
+            values=self.cluster_results[composition_key][initial:top],
+            lib_names=list(self.libraries.keys()),
+            save_path=save_path,
+        )
+
     def display_cluster_molecules(
             self,
             cluster_id: int,

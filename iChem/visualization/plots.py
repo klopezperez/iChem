@@ -6,6 +6,7 @@ from seaborn import heatmap # type: ignore
 #import plotly.graph_objects as go
 from collections import Counter, defaultdict
 from ..bitbirch.cluster import get_iSIM_clusters
+from ..bbreal import BBReal
 
 def clusters_pop_plot(clusters: list[int],
                       save_path: str = None,
@@ -61,6 +62,72 @@ def clusters_pop_isim_plot(clusters: list[int],
     # Get cluster populations and iSIM values
     all_populations = [len(cluster) for cluster in clusters[initial:top]]
     isim_values = get_iSIM_clusters(clusters[initial:top], fps)
+    
+    # Calculate statistics before limiting
+    total_clusters = len(all_populations)
+    n_singletons = sum(1 for pop in all_populations if pop == 1)
+
+    # Limit to top clusters for display
+    populations = all_populations[initial:top]
+    isim_values = isim_values[initial:top]
+
+    # Create figure and primary axis
+    fig, ax1 = plt.subplots(figsize=figsize)
+
+    # Plot cluster populations as bars
+    x = np.arange(len(populations))
+    bars = ax1.bar(x, populations, alpha=0.7, color='blue', label='Population')
+    ax1.set_xlabel('Cluster')
+    ax1.set_ylabel('Population', color='blue')
+    ax1.tick_params(axis='y', labelcolor='blue')
+    ax1.set_xticks(x)
+    ax1.set_xticklabels([str(i) for i in x], rotation=45, ha='right')
+
+    # Create secondary axis for iSIM values
+    ax2 = ax1.twinx()
+    line = ax2.plot(x, isim_values, color='darkorange', marker='o', 
+                    linewidth=2, markersize=6, label='iSIM')
+    ax2.set_ylabel('iSIM', color='darkorange')
+    ax2.tick_params(axis='y', labelcolor='darkorange')
+    ax2.set_ylim(0, 1)
+
+    # Add legends
+    lines1, labels1 = ax1.get_legend_handles_labels()
+    lines2, labels2 = ax2.get_legend_handles_labels()
+    ax1.legend(lines1 + lines2, labels1 + labels2, loc='upper left')
+
+    # Add annotation with cluster statistics
+    annotation_text = f'Total Clusters: {total_clusters}\nSingletons: {n_singletons}'
+    ax1.text(0.98, 0.98, annotation_text, transform=ax1.transAxes,
+             fontsize=10, verticalalignment='top', horizontalalignment='right',
+             bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+
+    plt.title('Cluster Population and iSIM')
+    fig.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=400)
+    else:
+        plt.show()
+
+def clusters_pop_isim_real_plot(bbreal_obj: BBReal,
+                           save_path: str = None,
+                           figsize: tuple = (12, 6),
+                           top=20,
+                           initial=0):
+    """Plot cluster population as bars with iSIM values on secondary axis.
+
+    Args:
+        clusters (list[int]): List of cluster assignments.
+        isim_values (list[float]): List of iSIM values for each cluster.
+        save_path (str, optional): Path to save the plot. Defaults to None.
+        figsize (tuple, optional): Figure size (width, height). Defaults to (12, 6).
+        top (int, optional): Number of top clusters to display. Defaults to 20.
+        initial (int, optional): Starting index for clusters to display. Defaults to 0."""
+
+    # Get cluster populations and iSIM values
+    all_populations = bbreal_obj.get_cluster_populations(initial=initial, top=top)
+    isim_values = bbreal_obj.get_iSIM_clusters(initial=initial, top=top)
     
     # Calculate statistics before limiting
     total_clusters = len(all_populations)
